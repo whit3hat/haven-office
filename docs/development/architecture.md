@@ -215,6 +215,21 @@ The app resolves `PAPERCLIP_HOME` at startup:
 
 This ensures the desktop app and CLI share the same database when both are installed.
 
+### Start path and remembered view
+
+The window opens on the company office (`/{prefix}/office`) rather than the server root. `src/connection/start-path.ts` resolves the path and the company prefix; every candidate is re-checked with `isNavigationAllowed` against the connection's allowed origin, so a start path can never widen the origin allowlist.
+
+The company prefix is configuration — most specific wins:
+
+1. `companyPrefix` on the connection profile in `connections.json`
+2. `HAVEN_OFFICE_COMPANY_PREFIX` in the environment
+3. `state.officeCompanyPrefix` in `connections.json` (global setting)
+4. the shipped default, `HAV`
+
+The last view visited in a connection is persisted per profile as an origin-relative path only (`lastViewPath`, and `state.localLastViewPath` for the local server) — never an origin — so reopening the app returns where the user left off, with the office as the first-run default. Persisted values are re-validated on load, so an edited `connections.json` cannot point the window at another host. Remote boot keeps the server's own URL while bootstrap or sign-in is pending, because the server drives those redirects itself.
+
+The **View** menu exposes the same views (Office, Board) through `resolveDesktopViewUrl`; adding a view is an edit to `DESKTOP_VIEWS` in `src/connection/start-path.ts`.
+
 ### PID file
 
 Writes `paperclip-electron.pid` to the `userData` directory. On startup, checks for an orphaned server process from a previous crash and kills it.
