@@ -1,4 +1,4 @@
-# Paperclip Desktop — Staged macOS Release Guide
+# Haven Office — Staged macOS Release Guide
 
 ## Purpose
 
@@ -351,16 +351,16 @@ After a successful build:
 
 ### x64
 
-- `release/local-macos/x64/mac/Paperclip Desktop.app`
-- `release/local-macos/x64/Paperclip Desktop-1.0.0.dmg`
-- `release/local-macos/x64/Paperclip Desktop-1.0.0-mac.zip`
+- `release/local-macos/x64/mac/Haven Office.app`
+- `release/local-macos/x64/Haven Office-1.0.0.dmg`
+- `release/local-macos/x64/Haven Office-1.0.0-mac.zip`
 - `release/local-macos/x64/verification-summary.json`
 
 ### arm64
 
-- `release/local-macos/arm64/mac-arm64/Paperclip Desktop.app`
-- `release/local-macos/arm64/Paperclip Desktop-1.0.0-arm64.dmg`
-- `release/local-macos/arm64/Paperclip Desktop-1.0.0-arm64-mac.zip`
+- `release/local-macos/arm64/mac-arm64/Haven Office.app`
+- `release/local-macos/arm64/Haven Office-1.0.0-arm64.dmg`
+- `release/local-macos/arm64/Haven Office-1.0.0-arm64-mac.zip`
 - `release/local-macos/arm64/verification-summary.json`
 
 For first-pass local QA, launch the `.app` bundles directly.

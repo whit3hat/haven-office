@@ -73,7 +73,7 @@ macOS release signing requires APPLE_CODESIGN_IDENTITY or CSC_NAME.
 Even though the signing hook failed, Electron Builder did create an unpacked app bundle directory before aborting:
 
 ```text
-release/mac/Paperclip Desktop.app
+release/mac/Haven Office.app
 ```
 
 This path exists from the latest local run.

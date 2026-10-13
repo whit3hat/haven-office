@@ -97,8 +97,12 @@ export function productionPaperclipDataPaths(platform: NodeJS.Platform, homePath
     return [];
   }
 
+  // "Haven Office" is this app's name (app.setName), so it owns the userData
+  // directory; "Paperclip" is kept because installs made before the rebrand
+  // still hold real data there, and ~/.paperclip is the server home either way.
   if (platform === "darwin") {
     return [
+      path.join(homePath, "Library", "Application Support", "Haven Office"),
       path.join(homePath, "Library", "Application Support", "Paperclip"),
       path.join(homePath, ".paperclip"),
     ];
@@ -106,12 +110,14 @@ export function productionPaperclipDataPaths(platform: NodeJS.Platform, homePath
 
   if (platform === "win32") {
     return [
+      path.join(homePath, "AppData", "Roaming", "Haven Office"),
       path.join(homePath, "AppData", "Roaming", "Paperclip"),
       path.join(homePath, ".paperclip"),
     ];
   }
 
   return [
+    path.join(homePath, ".config", "Haven Office"),
     path.join(homePath, ".config", "Paperclip"),
     path.join(homePath, ".paperclip"),
   ];

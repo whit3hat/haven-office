@@ -10,11 +10,11 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const projectRoot = resolve(__dirname, "..");
 const rootPackageJson = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf8"));
 
-const PRODUCT_NAME = "Paperclip Desktop";
-const APP_ID = "com.paperclipai.app";
-const COPYRIGHT = "Copyright © 2026 Aron Prins";
-const OWNER = "aronprins";
-const REPO = "paperclip-desktop";
+const PRODUCT_NAME = "Haven Office";
+const APP_ID = "xyz.havenco.haven-office";
+const COPYRIGHT = "Copyright © 2026 havenCo. Based on aronprins/paperclip-desktop, © 2026 Aron Prins (MIT).";
+const OWNER = "whit3hat";
+const REPO = "haven-office";
 const args = process.argv.slice(2);
 
 function takeOption(name) {

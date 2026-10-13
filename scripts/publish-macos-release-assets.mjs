@@ -59,14 +59,14 @@ function findSingle(files, pattern, label) {
 function collectAssets(inputDir, mode) {
   const files = listFiles(inputDir);
   const assets = [
-    findSingle(files, /^Paperclip-Desktop-.*(?<!arm64)-mac\.zip$/u, "x64 ZIP"),
-    findSingle(files, /^Paperclip-Desktop-.*-arm64-mac\.zip$/u, "arm64 ZIP"),
-    findSingle(files, /^Paperclip-Desktop-.*(?<!arm64)\.dmg$/u, "x64 DMG"),
-    findSingle(files, /^Paperclip-Desktop-.*-arm64\.dmg$/u, "arm64 DMG"),
-    findSingle(files, /^Paperclip-Desktop-.*(?<!arm64)-mac\.zip\.blockmap$/u, "x64 ZIP blockmap"),
-    findSingle(files, /^Paperclip-Desktop-.*-arm64-mac\.zip\.blockmap$/u, "arm64 ZIP blockmap"),
-    findSingle(files, /^Paperclip-Desktop-.*(?<!arm64)\.dmg\.blockmap$/u, "x64 DMG blockmap"),
-    findSingle(files, /^Paperclip-Desktop-.*-arm64\.dmg\.blockmap$/u, "arm64 DMG blockmap"),
+    findSingle(files, /^Haven-Office-.*(?<!arm64)-mac\.zip$/u, "x64 ZIP"),
+    findSingle(files, /^Haven-Office-.*-arm64-mac\.zip$/u, "arm64 ZIP"),
+    findSingle(files, /^Haven-Office-.*(?<!arm64)\.dmg$/u, "x64 DMG"),
+    findSingle(files, /^Haven-Office-.*-arm64\.dmg$/u, "arm64 DMG"),
+    findSingle(files, /^Haven-Office-.*(?<!arm64)-mac\.zip\.blockmap$/u, "x64 ZIP blockmap"),
+    findSingle(files, /^Haven-Office-.*-arm64-mac\.zip\.blockmap$/u, "arm64 ZIP blockmap"),
+    findSingle(files, /^Haven-Office-.*(?<!arm64)\.dmg\.blockmap$/u, "x64 DMG blockmap"),
+    findSingle(files, /^Haven-Office-.*-arm64\.dmg\.blockmap$/u, "arm64 DMG blockmap"),
   ];
 
   if (mode === "final") {

@@ -106,7 +106,7 @@ type LauncherView =
 type LauncherPresentation = "standalone" | "attached";
 type BootStep = "init" | "database" | "server" | "ready";
 
-app.setName("Paperclip");
+app.setName("Haven Office");
 applyDesktopUserDataOverride(app, process.env);
 
 // Capture native crashes locally (no upload) so segfaults that bypass the
@@ -774,7 +774,7 @@ async function createLauncherWindow(presentation: LauncherPresentation): Promise
     minimizable: !attached,
     parent: attached ? mainWindow ?? undefined : undefined,
     modal: attached,
-    title: "Paperclip",
+    title: "Haven Office",
     show: false,
     backgroundColor: "#0a0a0a",
     titleBarStyle: process.platform === "darwin" ? "hidden" : undefined,
@@ -965,7 +965,7 @@ function createMainWindow(input: {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    title: "Paperclip",
+    title: "Haven Office",
     show: false,
     backgroundColor: "#0a0a0a",
     webPreferences: {
@@ -1594,7 +1594,7 @@ function registerLauncherIpc(): void {
 function rebuildAppMenu(): void {
   const template: MenuItemConstructorOptions[] = [
     {
-      label: "Paperclip",
+      label: "Haven Office",
       submenu: [
         { role: "about" },
         {

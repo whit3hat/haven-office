@@ -3,7 +3,7 @@ export function getLauncherHtml(): string {
 <html>
 <head>
 <meta charset="utf-8">
-<title>Paperclip</title>
+<title>Haven Office</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -843,9 +843,10 @@ export function getLauncherHtml(): string {
 <div class="window">
   <button class="window-close" id="windowCloseBtn" aria-label="Close" onclick="closeLauncherSheet()">&times;</button>
   <div class="logo">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/></svg>
+    <!-- Haven Office monogram; same geometry as build/branding/make-icons.py. -->
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Haven Office"><rect x="0.144" y="0.144" width="23.712" height="23.712" rx="5.256" fill="#0f0f11" stroke="#27272a" stroke-width="0.288"/><g fill="#fafafa"><rect x="7.08" y="6.6" width="2.76" height="10.8"/><rect x="14.16" y="6.6" width="2.76" height="10.8"/><rect x="7.08" y="10.872" width="9.84" height="2.256"/></g></svg>
   </div>
-  <div class="app-title">Paperclip</div>
+  <div class="app-title">Haven Office</div>
 
   <div class="view active" id="view-chooser">
     <div class="tab-bar" role="tablist">
@@ -887,7 +888,7 @@ export function getLauncherHtml(): string {
       <div class="step-panel-body">
         <div class="form-group">
           <input type="text" id="remoteUrl" placeholder="https://paperclip.example.com">
-          <div class="field-hint">Desktop verifies /api/health and auth readiness. HTTPS recommended; HTTP requires acknowledgment.</div>
+          <div class="field-hint">Haven Office verifies /api/health and auth readiness. HTTPS recommended; HTTP requires acknowledgment.</div>
           <div class="field-error" id="urlError">Enter a valid remote URL.</div>
           <div class="field-success" id="urlSuccess">Verified authenticated Paperclip remote detected.</div>
         </div>

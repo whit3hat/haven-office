@@ -1,15 +1,15 @@
-# Paperclip Desktop — Architecture & Operations Guide
+# Haven Office — Architecture & Operations Guide
 
 ## Overview
 
-Paperclip Desktop is a standalone Electron wrapper around the [Paperclip](https://github.com/paperclipai/paperclip) server. It consumes `@paperclipai/server` and related packages from npm — it does **not** contain the engine source code.
+Haven Office is a standalone Electron wrapper around the [Paperclip](https://github.com/paperclipai/paperclip) server. It consumes `@paperclipai/server` and related packages from npm — it does **not** contain the engine source code.
 
 The Electron app spawns the Paperclip server as a child process and loads the UI via HTTP on localhost. It ships a bundled Node.js binary so end users don't need Node installed.
 
 ## Repository structure
 
 ```
-paperclip-desktop/
+haven-office/
   src/
     main.ts              Electron main process — window lifecycle, server spawn, splash screen
     preload.ts           Renderer preload — exposes updater IPC to the UI
@@ -184,8 +184,8 @@ The app uses `electron-updater` to check for new versions via GitHub Releases.
 ```yaml
 publish:
   provider: github
-  owner: aronprins
-  repo: paperclip-desktop
+  owner: whit3hat
+  repo: haven-office
   releaseType: release
 ```
 

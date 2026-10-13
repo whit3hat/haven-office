@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const projectRoot = resolve(__dirname, "..");
-const PRODUCT_NAME = "Paperclip Desktop";
+const PRODUCT_NAME = "Haven Office";
 const args = process.argv.slice(2);
 
 function requireEnv(name) {

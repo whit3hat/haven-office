@@ -132,7 +132,7 @@ export async function checkForUpdatesFromMenu(preferredWindow?: BrowserWindow | 
       await showDialog({
         type: "info",
         title: "You're Up to Date",
-        message: `Paperclip v${app.getVersion()} is already the latest version.`,
+        message: `Haven Office v${app.getVersion()} is already the latest version.`,
       });
       return;
     }
@@ -140,7 +140,7 @@ export async function checkForUpdatesFromMenu(preferredWindow?: BrowserWindow | 
     const { response } = await showDialog({
       type: "info",
       title: "Update Available",
-      message: `Paperclip v${result.updateInfo.version} is available.`,
+      message: `Haven Office v${result.updateInfo.version} is available.`,
       detail: "Download the update now? You'll be prompted to restart after the download completes.",
       buttons: ["Download", "Later"],
       defaultId: 0,
@@ -157,7 +157,7 @@ export async function checkForUpdatesFromMenu(preferredWindow?: BrowserWindow | 
       await showDialog({
         type: "info",
         title: "You're Up to Date",
-        message: `Paperclip v${app.getVersion()} is already the latest version.`,
+        message: `Haven Office v${app.getVersion()} is already the latest version.`,
       });
       return;
     }
@@ -166,7 +166,7 @@ export async function checkForUpdatesFromMenu(preferredWindow?: BrowserWindow | 
     await showDialog({
       type: "error",
       title: "Update Check Failed",
-      message: "Paperclip could not check for updates.",
+      message: "Haven Office could not check for updates.",
       detail: err instanceof Error ? err.message : String(err),
     });
   }
@@ -310,7 +310,7 @@ async function promptToRestart(version: string): Promise<void> {
     const { response } = await showDialog({
       type: "info",
       title: "Update Ready",
-      message: `Paperclip v${version} has been downloaded.`,
+      message: `Haven Office v${version} has been downloaded.`,
       detail: "Restart now to apply the update?",
       buttons: ["Restart", "Later"],
       defaultId: 0,

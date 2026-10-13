@@ -1,6 +1,6 @@
 # Desktop Release Runbook
 
-This is the repeatable operator guide for shipping `paperclip-desktop`.
+This is the repeatable operator guide for shipping `haven-office`.
 
 It documents the safe default stable release path now in use:
 
@@ -67,7 +67,7 @@ Use plain language. Prefer user impact over implementation detail.
 Recommended draft release notes template:
 
 ```md
-Paperclip Desktop <DESKTOP_VERSION>
+Haven Office <DESKTOP_VERSION>
 
 This release is being prepared for public launch.
 
@@ -86,7 +86,7 @@ Status:
 Recommended final release notes template:
 
 ```md
-Paperclip Desktop <DESKTOP_VERSION>
+Haven Office <DESKTOP_VERSION>
 
 This release improves reliability and polish across the desktop app, with a safer and more stable update experience on macOS.
 
@@ -222,8 +222,8 @@ node -e "const p=require('./build/server-bundle/mac-arm64/server/package.json');
 Verify signing:
 
 ```bash
-codesign -dvv 'release/local-macos/x64/mac/Paperclip Desktop.app'
-codesign -dvv 'release/local-macos/arm64/mac-arm64/Paperclip Desktop.app'
+codesign -dvv 'release/local-macos/x64/mac/Haven Office.app'
+codesign -dvv 'release/local-macos/arm64/mac-arm64/Haven Office.app'
 ```
 
 The authority should be your `Developer ID Application` identity.
@@ -243,10 +243,10 @@ Use the smoke-test script instead of launching release candidates directly from 
 uname -m
 
 # Run this on an x86_64 Mac
-pnpm smoke:mac:packaged -- --app 'release/local-macos/x64/mac/Paperclip Desktop.app'
+pnpm smoke:mac:packaged -- --app 'release/local-macos/x64/mac/Haven Office.app'
 
 # Run this on an arm64 Mac
-pnpm smoke:mac:packaged -- --app 'release/local-macos/arm64/mac-arm64/Paperclip Desktop.app'
+pnpm smoke:mac:packaged -- --app 'release/local-macos/arm64/mac-arm64/Haven Office.app'
 ```
 
 Do not treat Rosetta or another translation layer as native smoke coverage. A normal release machine only runs one of the two commands above; Step 4 uses a native GitHub-hosted runner for the other architecture.
@@ -403,11 +403,11 @@ Only use this when local monitoring is not available. Local monitoring is cheape
 Once both submissions show `Accepted`, staple the exact approved app bundles:
 
 ```bash
-xcrun stapler staple -v 'release/local-macos/x64/mac/Paperclip Desktop.app'
-xcrun stapler validate -v 'release/local-macos/x64/mac/Paperclip Desktop.app'
+xcrun stapler staple -v 'release/local-macos/x64/mac/Haven Office.app'
+xcrun stapler validate -v 'release/local-macos/x64/mac/Haven Office.app'
 
-xcrun stapler staple -v 'release/local-macos/arm64/mac-arm64/Paperclip Desktop.app'
-xcrun stapler validate -v 'release/local-macos/arm64/mac-arm64/Paperclip Desktop.app'
+xcrun stapler staple -v 'release/local-macos/arm64/mac-arm64/Haven Office.app'
+xcrun stapler validate -v 'release/local-macos/arm64/mac-arm64/Haven Office.app'
 ```
 
 Do not rebuild before stapling. Staple the exact app bundles that correspond to the notarized ZIP submissions.
@@ -421,12 +421,12 @@ rm -rf release/notarized-macos
 mkdir -p release/notarized-macos
 
 node scripts/repackage-prebuilt-macos.mjs \
-  --app 'release/local-macos/x64/mac/Paperclip Desktop.app' \
+  --app 'release/local-macos/x64/mac/Haven Office.app' \
   --arch x64 \
   --output-dir 'release/notarized-macos/x64'
 
 node scripts/repackage-prebuilt-macos.mjs \
-  --app 'release/local-macos/arm64/mac-arm64/Paperclip Desktop.app' \
+  --app 'release/local-macos/arm64/mac-arm64/Haven Office.app' \
   --arch arm64 \
   --output-dir 'release/notarized-macos/arm64'
 ```
@@ -435,8 +435,8 @@ Copy the stapled `.app` bundles into those final output directories so verificat
 
 ```bash
 mkdir -p 'release/notarized-macos/x64/mac' 'release/notarized-macos/arm64/mac-arm64'
-ditto 'release/local-macos/x64/mac/Paperclip Desktop.app' 'release/notarized-macos/x64/mac/Paperclip Desktop.app'
-ditto 'release/local-macos/arm64/mac-arm64/Paperclip Desktop.app' 'release/notarized-macos/arm64/mac-arm64/Paperclip Desktop.app'
+ditto 'release/local-macos/x64/mac/Haven Office.app' 'release/notarized-macos/x64/mac/Haven Office.app'
+ditto 'release/local-macos/arm64/mac-arm64/Haven Office.app' 'release/notarized-macos/arm64/mac-arm64/Haven Office.app'
 ```
 
 Prepare the updater-compatible notarized release bundle:
@@ -485,10 +485,10 @@ Expected final output directories:
 
 Expected final artifacts:
 
-- `Paperclip Desktop-<DESKTOP_VERSION>.dmg`
-- `Paperclip Desktop-<DESKTOP_VERSION>-mac.zip`
-- `Paperclip Desktop-<DESKTOP_VERSION>-arm64.dmg`
-- `Paperclip Desktop-<DESKTOP_VERSION>-arm64-mac.zip`
+- `Haven Office-<DESKTOP_VERSION>.dmg`
+- `Haven Office-<DESKTOP_VERSION>-mac.zip`
+- `Haven Office-<DESKTOP_VERSION>-arm64.dmg`
+- `Haven Office-<DESKTOP_VERSION>-arm64-mac.zip`
 - `Paperclip-Desktop-<DESKTOP_VERSION>.dmg`
 - `Paperclip-Desktop-<DESKTOP_VERSION>-mac.zip`
 - `Paperclip-Desktop-<DESKTOP_VERSION>-arm64.dmg`
@@ -517,7 +517,7 @@ On an `x86_64` Mac:
 ```bash
 FINAL_SMOKE_X64_DIR="$(mktemp -d)"
 ditto -x -k 'release/notarized-macos/release-assets/Paperclip-Desktop-<DESKTOP_VERSION>-mac.zip' "$FINAL_SMOKE_X64_DIR"
-pnpm smoke:mac:packaged -- --app "$FINAL_SMOKE_X64_DIR/Paperclip Desktop.app"
+pnpm smoke:mac:packaged -- --app "$FINAL_SMOKE_X64_DIR/Haven Office.app"
 ```
 
 On an `arm64` Mac:
@@ -525,7 +525,7 @@ On an `arm64` Mac:
 ```bash
 FINAL_SMOKE_ARM64_DIR="$(mktemp -d)"
 ditto -x -k 'release/notarized-macos/release-assets/Paperclip-Desktop-<DESKTOP_VERSION>-arm64-mac.zip' "$FINAL_SMOKE_ARM64_DIR"
-pnpm smoke:mac:packaged -- --app "$FINAL_SMOKE_ARM64_DIR/Paperclip Desktop.app"
+pnpm smoke:mac:packaged -- --app "$FINAL_SMOKE_ARM64_DIR/Haven Office.app"
 ```
 
 Dispatch `smoke-packaged-macos.yml` again for the other architecture, using the same command as Step 4. The workflow now downloads the replaced, final ZIP from the draft release. Both final architectures must pass on native hardware.

@@ -1,6 +1,6 @@
-appId: com.paperclipai.app
-productName: Paperclip Desktop
-copyright: Copyright © 2026 Aron Prins
+appId: xyz.havenco.haven-office
+productName: Haven Office
+copyright: Copyright © 2026 havenCo. Based on aronprins/paperclip-desktop, © 2026 Aron Prins (MIT).
 
 directories:
   output: release
@@ -13,8 +13,8 @@ files:
 # Auto-update via GitHub Releases
 publish:
   provider: github
-  owner: aronprins
-  repo: paperclip-desktop
+  owner: whit3hat
+  repo: haven-office
   releaseType: release
 
 # Bundle the built server + UI alongside the app.
@@ -115,9 +115,9 @@ nsis:
 linux:
   icon: build/icon.png
   category: Development
-  maintainer: Aron Prins
-  executableName: paperclip
-  artifactName: "Paperclip-${version}-${arch}.${ext}"
+  maintainer: havenCo
+  executableName: haven-office
+  artifactName: "Haven-Office-${version}-${arch}.${ext}"
   target:
     - target: AppImage
       arch:

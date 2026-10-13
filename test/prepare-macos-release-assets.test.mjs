@@ -41,22 +41,22 @@ function writeArchFixture(rootDir, arch, { zipName, dmgName, zipSha, dmgSha, rel
 }
 
 test("prepareMacosReleaseAssets merges both architectures and preserves manifest metadata", () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), "paperclip-release-assets-test-"));
+  const tempRoot = mkdtempSync(join(tmpdir(), "haven-office-release-assets-test-"));
   const inputRoot = join(tempRoot, "input");
   const outputDir = join(tempRoot, "output");
 
   try {
     writeArchFixture(inputRoot, "x64", {
-      zipName: "Paperclip Desktop-1.2.3-mac.zip",
-      dmgName: "Paperclip Desktop-1.2.3.dmg",
+      zipName: "Haven Office-1.2.3-mac.zip",
+      dmgName: "Haven Office-1.2.3.dmg",
       zipSha: "x64zipsha",
       dmgSha: "x64dmgsha",
       releaseDate: "2026-04-05T10:00:00.000Z",
     });
 
     writeArchFixture(inputRoot, "arm64", {
-      zipName: "Paperclip Desktop-1.2.3-arm64-mac.zip",
-      dmgName: "Paperclip Desktop-1.2.3-arm64.dmg",
+      zipName: "Haven Office-1.2.3-arm64-mac.zip",
+      dmgName: "Haven Office-1.2.3-arm64.dmg",
       zipSha: "armzipsha",
       dmgSha: "armdmgsha",
       releaseDate: "2026-04-05T11:00:00.000Z",
@@ -67,37 +67,37 @@ test("prepareMacosReleaseAssets merges both architectures and preserves manifest
     const manifest = readFileSync(join(outputDir, "latest-mac.yml"), "utf8");
     assert.match(manifest, /minimumSystemVersion: 13\.0\.0/);
     assert.match(manifest, /stagingPercentage: 25/);
-    assert.match(manifest, /Paperclip-Desktop-1\.2\.3-mac\.zip/);
-    assert.match(manifest, /Paperclip-Desktop-1\.2\.3-arm64-mac\.zip/);
+    assert.match(manifest, /Haven-Office-1\.2\.3-mac\.zip/);
+    assert.match(manifest, /Haven-Office-1\.2\.3-arm64-mac\.zip/);
     assert.match(manifest, /releaseDate: '2026-04-05T11:00:00\.000Z'/);
-    assert.match(manifest, /path: Paperclip-Desktop-1\.2\.3-mac\.zip/);
+    assert.match(manifest, /path: Haven-Office-1\.2\.3-mac\.zip/);
 
-    assert.equal(readFileSync(join(outputDir, "Paperclip-Desktop-1.2.3-mac.zip"), "utf8"), "x64-zip\n");
-    assert.equal(readFileSync(join(outputDir, "Paperclip-Desktop-1.2.3-arm64-mac.zip"), "utf8"), "arm64-zip\n");
-    assert.equal(readFileSync(join(outputDir, "Paperclip-Desktop-1.2.3-mac.zip.blockmap"), "utf8"), "x64-zip-blockmap\n");
-    assert.equal(readFileSync(join(outputDir, "Paperclip-Desktop-1.2.3-arm64-mac.zip.blockmap"), "utf8"), "arm64-zip-blockmap\n");
+    assert.equal(readFileSync(join(outputDir, "Haven-Office-1.2.3-mac.zip"), "utf8"), "x64-zip\n");
+    assert.equal(readFileSync(join(outputDir, "Haven-Office-1.2.3-arm64-mac.zip"), "utf8"), "arm64-zip\n");
+    assert.equal(readFileSync(join(outputDir, "Haven-Office-1.2.3-mac.zip.blockmap"), "utf8"), "x64-zip-blockmap\n");
+    assert.equal(readFileSync(join(outputDir, "Haven-Office-1.2.3-arm64-mac.zip.blockmap"), "utf8"), "arm64-zip-blockmap\n");
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
 test("prepareMacosReleaseAssets rejects mismatched preserved metadata", () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), "paperclip-release-assets-test-"));
+  const tempRoot = mkdtempSync(join(tmpdir(), "haven-office-release-assets-test-"));
   const inputRoot = join(tempRoot, "input");
   const outputDir = join(tempRoot, "output");
 
   try {
     writeArchFixture(inputRoot, "x64", {
-      zipName: "Paperclip Desktop-1.2.3-mac.zip",
-      dmgName: "Paperclip Desktop-1.2.3.dmg",
+      zipName: "Haven Office-1.2.3-mac.zip",
+      dmgName: "Haven Office-1.2.3.dmg",
       zipSha: "x64zipsha",
       dmgSha: "x64dmgsha",
       releaseDate: "2026-04-05T10:00:00.000Z",
     });
 
     writeArchFixture(inputRoot, "arm64", {
-      zipName: "Paperclip Desktop-1.2.3-arm64-mac.zip",
-      dmgName: "Paperclip Desktop-1.2.3-arm64.dmg",
+      zipName: "Haven Office-1.2.3-arm64-mac.zip",
+      dmgName: "Haven Office-1.2.3-arm64.dmg",
       zipSha: "armzipsha",
       dmgSha: "armdmgsha",
       releaseDate: "2026-04-05T11:00:00.000Z",
@@ -119,22 +119,22 @@ test("prepareMacosReleaseAssets rejects mismatched preserved metadata", () => {
 });
 
 test("prepareMacosReleaseAssets can override stagingPercentage in the merged manifest", () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), "paperclip-release-assets-test-"));
+  const tempRoot = mkdtempSync(join(tmpdir(), "haven-office-release-assets-test-"));
   const inputRoot = join(tempRoot, "input");
   const outputDir = join(tempRoot, "output");
 
   try {
     writeArchFixture(inputRoot, "x64", {
-      zipName: "Paperclip Desktop-1.2.3-mac.zip",
-      dmgName: "Paperclip Desktop-1.2.3.dmg",
+      zipName: "Haven Office-1.2.3-mac.zip",
+      dmgName: "Haven Office-1.2.3.dmg",
       zipSha: "x64zipsha",
       dmgSha: "x64dmgsha",
       releaseDate: "2026-04-05T10:00:00.000Z",
     });
 
     writeArchFixture(inputRoot, "arm64", {
-      zipName: "Paperclip Desktop-1.2.3-arm64-mac.zip",
-      dmgName: "Paperclip Desktop-1.2.3-arm64.dmg",
+      zipName: "Haven Office-1.2.3-arm64-mac.zip",
+      dmgName: "Haven Office-1.2.3-arm64.dmg",
       zipSha: "armzipsha",
       dmgSha: "armdmgsha",
       releaseDate: "2026-04-05T11:00:00.000Z",

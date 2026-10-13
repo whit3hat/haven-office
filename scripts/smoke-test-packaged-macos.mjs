@@ -12,7 +12,7 @@ const timeoutMs = Number.parseInt(takeOption("--timeout-ms") || "90000", 10);
 const keepData = hasFlag("--keep-data");
 
 if (!appPath) {
-  fail("Missing --app /path/to/Paperclip Desktop.app or packaged executable.");
+  fail("Missing --app '/path/to/Haven Office.app' or packaged executable.");
 }
 
 const executablePath = resolveExecutable(appPath);
@@ -179,6 +179,7 @@ function productionPaperclipDataPaths() {
   const home = os.homedir();
   if (process.platform === "darwin") {
     return [
+      path.join(home, "Library", "Application Support", "Haven Office"),
       path.join(home, "Library", "Application Support", "Paperclip"),
       path.join(home, ".paperclip"),
     ];

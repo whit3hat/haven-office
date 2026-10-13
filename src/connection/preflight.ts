@@ -102,7 +102,7 @@ export async function preflightRemoteConnection(options: PreflightOptions): Prom
         version: health.version,
         reason: "unsupported_local_trusted",
         detail:
-          "This Paperclip server is configured for loopback-only local use. Reconfigure it to upstream authenticated mode before using Desktop remote mode.",
+          "This Paperclip server is configured for loopback-only local use. Reconfigure it to upstream authenticated mode before using Haven Office remote mode.",
         warning: buildVersionWarning(health.version, options.localServerVersion, normalized.warning),
       };
     }

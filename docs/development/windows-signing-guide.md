@@ -1,6 +1,6 @@
 # Windows Signing Guide
 
-This guide explains how to set up Windows code signing for `paperclip-desktop` using:
+This guide explains how to set up Windows code signing for `haven-office` using:
 
 - `electron-builder`
 - GitHub Actions
@@ -85,8 +85,8 @@ Then create the Artifact Signing account in the Azure portal or with Azure CLI.
 
 When choosing names, keep them stable and boring. A good pattern is:
 
-- account name: `paperclip-signing`
-- certificate profile: `paperclip-desktop`
+- account name: `havenco-signing`
+- certificate profile: `haven-office`
 
 Write these down as you create them:
 
@@ -133,7 +133,7 @@ That publisher common name must match `publisherName` in `electron-builder`.
 Example:
 
 ```text
-Publisher name: Aron Prins
+Publisher name: havenCo
 ```
 
 If Azure shows a legal entity name instead, use that exact string. Do not normalize it yourself.
@@ -146,7 +146,7 @@ In the Microsoft Entra admin center:
 
 1. Go to `Entra ID > App registrations`.
 2. Click `New registration`.
-3. Name it something like `paperclip-desktop-github-actions`.
+3. Name it something like `haven-office-github-actions`.
 4. Use `Accounts in this organizational directory only`.
 5. Create the app.
 
@@ -229,9 +229,9 @@ AZURE_TENANT_ID=11111111-1111-1111-1111-111111111111
 AZURE_CLIENT_ID=22222222-2222-2222-2222-222222222222
 AZURE_CLIENT_SECRET=<secret value from Entra>
 WINDOWS_SIGNING_ENDPOINT=https://weu.codesigning.azure.net/
-WINDOWS_SIGNING_ACCOUNT_NAME=paperclip-signing
-WINDOWS_SIGNING_CERT_PROFILE=paperclip-desktop
-WINDOWS_SIGNING_PUBLISHER_NAME=Aron Prins
+WINDOWS_SIGNING_ACCOUNT_NAME=havenco-signing
+WINDOWS_SIGNING_CERT_PROFILE=haven-office
+WINDOWS_SIGNING_PUBLISHER_NAME=havenCo
 ```
 
 ## Step 8: Add The Secrets To GitHub
@@ -328,7 +328,7 @@ Example:
   shell: pwsh
   run: |
     $ErrorActionPreference = "Stop"
-    signtool verify /pa "release\\win-unpacked\\Paperclip Desktop.exe"
+    signtool verify /pa "release\\win-unpacked\\Haven Office.exe"
     Get-ChildItem release -Filter *.exe | ForEach-Object {
       signtool verify /pa $_.FullName
     }
