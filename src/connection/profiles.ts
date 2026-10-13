@@ -7,6 +7,11 @@ import {
   CONNECTIONS_FILE_VERSION,
   LOCAL_PROFILE_ID,
 } from "./types";
+import {
+  normalizeCompanyPrefix,
+  normalizeViewPath,
+  resolveCompanyPrefix,
+} from "./start-path";
 import type {
   ConnectionHealth,
   ConnectionMode,
@@ -225,6 +230,47 @@ export class ConnectionStore {
     this.persist();
   }
 
+  /** Company prefix for a connection: profile value, env override, global setting, default. */
+  getCompanyPrefix(profileId: string | null, env: Record<string, string | undefined> = process.env): string {
+    const profile = profileId && profileId !== LOCAL_PROFILE_ID ? this.getProfile(profileId) : null;
+    return resolveCompanyPrefix({ profile, state: this.cache.state, env });
+  }
+
+  getLastViewPath(profileId: string | null): string | null {
+    if (!profileId) {
+      return null;
+    }
+
+    if (profileId === LOCAL_PROFILE_ID) {
+      return normalizeViewPath(this.cache.state.localLastViewPath);
+    }
+
+    const profile = this.cache.remoteProfiles.find((candidate) => candidate.id === profileId);
+    return normalizeViewPath(profile?.lastViewPath);
+  }
+
+  /** Remembers where the user was, as an origin-relative path. Unchanged paths skip the write. */
+  recordLastViewPath(profileId: string, viewPath: string): void {
+    const normalized = normalizeViewPath(viewPath);
+    if (!normalized || normalized === this.getLastViewPath(profileId)) {
+      return;
+    }
+
+    if (profileId === LOCAL_PROFILE_ID) {
+      this.cache.state.localLastViewPath = normalized;
+      this.persist();
+      return;
+    }
+
+    const profile = this.cache.remoteProfiles.find((candidate) => candidate.id === profileId);
+    if (!profile) {
+      return;
+    }
+
+    profile.lastViewPath = normalized;
+    this.persist();
+  }
+
   getRecentRemoteProfiles(limit = 5): ConnectionProfile[] {
     return this.cache.remoteProfiles
       .slice()
@@ -298,6 +344,8 @@ function sanitizeConnectionState(raw: unknown): ConnectionState {
     localLastConnectedAt:
       typeof raw.localLastConnectedAt === "string" ? raw.localLastConnectedAt : undefined,
     localLastHealth: sanitizeHealth(raw.localLastHealth) ?? "healthy",
+    officeCompanyPrefix: normalizeCompanyPrefix(raw.officeCompanyPrefix) ?? undefined,
+    localLastViewPath: normalizeViewPath(raw.localLastViewPath) ?? undefined,
   };
 }
 
@@ -335,6 +383,8 @@ function sanitizeRemoteProfile(raw: unknown): ConnectionProfile | null {
         raw.lastSessionState === "unknown"
           ? raw.lastSessionState
           : "unknown",
+      companyPrefix: normalizeCompanyPrefix(raw.companyPrefix) ?? undefined,
+      lastViewPath: normalizeViewPath(raw.lastViewPath) ?? undefined,
     };
   } catch {
     return null;

@@ -41,6 +41,12 @@ import {
   remotePartitionForProfile,
   shouldOpenExternally,
 } from "./connection/window-policy";
+import {
+  DESKTOP_VIEWS,
+  resolveDesktopViewUrl,
+  resolveStartUrl,
+  toViewPath,
+} from "./connection/start-path";
 import { LOCAL_PROFILE_ID } from "./connection/types";
 import type {
   ConnectionMode,
@@ -922,8 +928,33 @@ function applyWindowPolicy(win: BrowserWindow, allowedOrigin: string): void {
   }
 }
 
+/**
+ * Remembers the current view for a connection so the next launch reopens it.
+ * Only the origin-relative path is stored, and only for in-origin URLs.
+ */
+function trackLastViewPath(win: BrowserWindow, profileId: string, allowedOrigin: string): void {
+  const record = (targetUrl: string): void => {
+    const viewPath = toViewPath(targetUrl, allowedOrigin);
+    if (viewPath) {
+      connectionStore.recordLastViewPath(profileId, viewPath);
+    }
+  };
+
+  win.webContents.on("did-navigate", (_event, targetUrl) => {
+    record(targetUrl);
+  });
+
+  // The web app is a single-page app, so most view changes are pushState.
+  win.webContents.on("did-navigate-in-page", (_event, targetUrl, isMainFrame) => {
+    if (isMainFrame) {
+      record(targetUrl);
+    }
+  });
+}
+
 function createMainWindow(input: {
   mode: ConnectionMode;
+  profileId: string | null;
   startUrl: string;
   allowedOrigin: string;
   partition: string;
@@ -947,6 +978,10 @@ function createMainWindow(input: {
   });
 
   applyWindowPolicy(win, input.allowedOrigin);
+
+  if (input.profileId) {
+    trackLastViewPath(win, input.profileId, input.allowedOrigin);
+  }
 
   win.once("ready-to-show", () => {
     win.show();
@@ -999,6 +1034,7 @@ async function reopenCurrentConnectionWindow(): Promise<boolean> {
 
   const window = createMainWindow({
     mode: currentConnection.mode,
+    profileId: currentConnection.profileId,
     startUrl: currentConnection.startUrl,
     allowedOrigin: currentConnection.allowedOrigin,
     partition: currentConnection.partition,
@@ -1012,7 +1048,14 @@ async function reopenCurrentConnectionWindow(): Promise<boolean> {
     await resetLocalEmbeddedUiSession(currentConnection.allowedOrigin, window.webContents.session);
   }
 
-  await window.loadURL(currentConnection.startUrl);
+  // Reopening returns to the remembered view rather than the original boot URL.
+  await window.loadURL(
+    resolveStartUrl({
+      allowedOrigin: currentConnection.allowedOrigin,
+      prefix: connectionStore.getCompanyPrefix(currentConnection.profileId),
+      lastViewPath: connectionStore.getLastViewPath(currentConnection.profileId),
+    }),
+  );
   await replaceMainWindow(window);
   if (currentConnection.mode === "local_embedded") {
     initAutoUpdater(window);
@@ -1161,16 +1204,23 @@ async function bootLocal(options: {
     sendBootStatus("server", "Server is ready", 70);
     sendBootStatus("ready", "Loading the UI...", 80);
 
-    const startUrl = `http://localhost:${serverPort}`;
+    const allowedOrigin = new URL(`http://localhost:${serverPort}`).origin;
+    // Land on the remembered view, defaulting to the office on first run.
+    const startUrl = resolveStartUrl({
+      allowedOrigin,
+      prefix: connectionStore.getCompanyPrefix(LOCAL_PROFILE_ID),
+      lastViewPath: connectionStore.getLastViewPath(LOCAL_PROFILE_ID),
+    });
     const window = createMainWindow({
       mode: "local_embedded",
+      profileId: LOCAL_PROFILE_ID,
       startUrl,
-      allowedOrigin: new URL(startUrl).origin,
+      allowedOrigin,
       partition: localPartition(),
       preloadPath: path.join(__dirname, "preload.js"),
     });
 
-    await resetLocalEmbeddedUiSession(new URL(startUrl).origin, window.webContents.session);
+    await resetLocalEmbeddedUiSession(allowedOrigin, window.webContents.session);
     await window.loadURL(startUrl);
     if (bootId !== bootSequence) {
       window.destroy();
@@ -1193,7 +1243,7 @@ async function bootLocal(options: {
       mode: "local_embedded",
       profileId: LOCAL_PROFILE_ID,
       startUrl,
-      allowedOrigin: new URL(startUrl).origin,
+      allowedOrigin,
       partition: localPartition(),
     };
     connectionStore.recordConnectionResult(LOCAL_PROFILE_ID);
@@ -1206,7 +1256,7 @@ async function bootLocal(options: {
     sendLauncherState();
 
     sendBootStatus("ready", "Ready!", 100);
-    startLocalServerMonitor(new URL(startUrl).origin);
+    startLocalServerMonitor(allowedOrigin);
     closeLauncherWindow();
     initAutoUpdater(window);
   } catch (error) {
@@ -1310,10 +1360,22 @@ async function bootRemote(options: {
   }
   sendLauncherState();
 
-  const partition = remotePartitionKey(savedProfile?.id ?? options.profileId ?? null, result.origin);
+  const profileId = savedProfile?.id ?? options.profileId ?? null;
+  const partition = remotePartitionKey(profileId, result.origin);
+  // Setup and sign-in are driven by the server's own redirects, so only a
+  // usable session deep-links to the office or the remembered view.
+  const startUrl =
+    result.bootstrapStatus === "bootstrap_pending" || result.sessionState === "signed_out"
+      ? result.normalizedUrl
+      : resolveStartUrl({
+          allowedOrigin: result.origin,
+          prefix: connectionStore.getCompanyPrefix(profileId),
+          lastViewPath: connectionStore.getLastViewPath(profileId),
+        });
   const window = createMainWindow({
     mode: "remote_existing",
-    startUrl: result.normalizedUrl,
+    profileId,
+    startUrl,
     allowedOrigin: result.origin,
     partition,
   });
@@ -1329,7 +1391,7 @@ async function bootRemote(options: {
   });
 
   try {
-    await window.loadURL(result.normalizedUrl);
+    await window.loadURL(startUrl);
     if (bootId !== bootSequence) {
       window.destroy();
       return;
@@ -1343,7 +1405,7 @@ async function bootRemote(options: {
     currentConnection = {
       mode: "remote_existing",
       profileId: savedProfile?.id ?? null,
-      startUrl: result.normalizedUrl,
+      startUrl,
       allowedOrigin: result.origin,
       partition,
     };
@@ -1566,6 +1628,8 @@ function rebuildAppMenu(): void {
     {
       label: "View",
       submenu: [
+        ...buildDesktopViewMenuItems(),
+        { type: "separator" },
         { role: "reload" },
         { role: "forceReload" },
         { role: "toggleDevTools" },
@@ -1591,6 +1655,45 @@ function rebuildAppMenu(): void {
   ];
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+/**
+ * Office/Board items for the active connection. Each one resolves through
+ * `resolveDesktopViewUrl`, so a view that would leave the allowed origin is
+ * simply not navigable.
+ */
+function buildDesktopViewMenuItems(): MenuItemConstructorOptions[] {
+  return DESKTOP_VIEWS.map((view) => ({
+    label: view.label,
+    accelerator: view.accelerator,
+    enabled: currentConnection !== null,
+    click: () => {
+      void navigateToDesktopView(view.key);
+    },
+  }));
+}
+
+async function navigateToDesktopView(viewKey: string): Promise<void> {
+  if (!currentConnection) {
+    return;
+  }
+
+  const target = resolveDesktopViewUrl({
+    allowedOrigin: currentConnection.allowedOrigin,
+    prefix: connectionStore.getCompanyPrefix(currentConnection.profileId),
+    viewKey,
+  });
+  if (!target) {
+    return;
+  }
+
+  if (!(await reopenCurrentConnectionWindow())) {
+    return;
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    await mainWindow.loadURL(target);
+  }
 }
 
 function buildConnectionMenuItems(): MenuItemConstructorOptions[] {

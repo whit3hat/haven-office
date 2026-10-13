@@ -34,6 +34,10 @@ export interface ConnectionProfile {
   lastHealth?: ConnectionHealth;
   lastDeploymentMode?: DeploymentMode | null;
   lastSessionState?: SessionState;
+  /** Company prefix used to build `/{prefix}/office`; overrides the global setting. */
+  companyPrefix?: string;
+  /** Origin-relative path of the last view in this connection (no origin stored). */
+  lastViewPath?: string;
 }
 
 export interface ConnectionState {
@@ -44,6 +48,10 @@ export interface ConnectionState {
   localProfileName: string;
   localLastConnectedAt?: string;
   localLastHealth?: ConnectionHealth;
+  /** Global company prefix for the office start path; per-profile values win. */
+  officeCompanyPrefix?: string;
+  /** Origin-relative path of the last view on the local server (no origin stored). */
+  localLastViewPath?: string;
 }
 
 export interface PersistedConnectionsFile {
