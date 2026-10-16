@@ -33,6 +33,8 @@ jobs:
     environment: release
     env:
       RELEASE_REF: ${{ github.event.inputs.ref || 'master' }}
+    outputs:
+      signing-mode: ${{ steps.signing-mode.outputs.mode }}
 
     steps:
       - uses: actions/checkout@v4
@@ -51,7 +53,41 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Signing is a board decision (HAV-32). Until an Apple Developer ID exists
+      # the three signing secrets are absent, and this job builds an unsigned,
+      # ad-hoc signed app instead of failing. It flips to the signed path on its
+      # own the first time all three secrets are present — no workflow edit.
+      - name: Resolve macOS signing mode
+        id: signing-mode
+        env:
+          HAS_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY != '' }}
+          HAS_CERTIFICATE: ${{ secrets.MAC_CERTIFICATE_P12_BASE64 != '' }}
+          HAS_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$HAS_IDENTITY" = "true" ] && [ "$HAS_CERTIFICATE" = "true" ] && [ "$HAS_CERTIFICATE_PASSWORD" = "true" ]; then
+            echo "MACOS_SIGNING_MODE=signed" >> "$GITHUB_ENV"
+            echo "mode=signed" >> "$GITHUB_OUTPUT"
+            echo "### macOS build: **signed** with a Developer ID" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "MACOS_SIGNING_MODE=unsigned" >> "$GITHUB_ENV"
+            echo "ALLOW_UNSIGNED_MACOS_BUILD=true" >> "$GITHUB_ENV"
+            echo "mode=unsigned" >> "$GITHUB_OUTPUT"
+            {
+              echo "### macOS build: **unsigned** (ad-hoc signature)"
+              echo
+              echo "Apple signing secrets are not configured, so this build is not signed and"
+              echo "not notarized. macOS will warn that it is from an unidentified developer on"
+              echo "first open — see \`docs/install-runbook.md\`. Missing:"
+              echo
+              [ "$HAS_IDENTITY" = "true" ] || echo "- \`APPLE_CODESIGN_IDENTITY\`"
+              [ "$HAS_CERTIFICATE" = "true" ] || echo "- \`MAC_CERTIFICATE_P12_BASE64\`"
+              [ "$HAS_CERTIFICATE_PASSWORD" = "true" ] || echo "- \`MAC_CERTIFICATE_PASSWORD\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Prepare Apple signing assets
+        if: env.MACOS_SIGNING_MODE == 'signed'
         env:
           APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
           MAC_CERTIFICATE_P12_BASE64: ${{ secrets.MAC_CERTIFICATE_P12_BASE64 }}
@@ -114,6 +150,110 @@ jobs:
             security delete-keychain "$KEYCHAIN_PATH" || true
           fi
           rm -f "${CERT_PATH:-}"
+
+  # Upstream deliberately skips `publish-release` when the mac job runs, because
+  # upstream publishes macOS assets by hand from a Mac after notarization. We
+  # need the workflow itself to publish, so this job does it — but only when the
+  # dispatched ref is a version tag, which is the same explicit opt-in upstream's
+  # `publish-release` uses. Dispatching `ref=master` therefore still only
+  # produces a CI artifact and publishes nothing.
+  publish-mac:
+    name: Publish macOS release
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      needs.build-mac.result == 'success' &&
+      (startsWith(github.event.inputs.ref, 'v') || startsWith(github.event.inputs.ref, 'refs/tags/v'))
+    needs:
+      - build-mac
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_REF: ${{ github.event.inputs.ref || 'master' }}
+      MACOS_SIGNING_MODE: ${{ needs.build-mac.outputs.signing-mode }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-mac
+          path: release/mac-release-assets
+
+      - name: Resolve release tag
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_REF#refs/tags/}"
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: Write release notes
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          {
+            echo "Haven Office \`$RELEASE_TAG\` — havenCo's desktop shell for Paperclip."
+            echo
+            echo "**macOS only.** Download the \`.dmg\` that matches your Mac:"
+            echo
+            echo "- Apple Silicon (M1 and later) — \`*-arm64.dmg\`"
+            echo "- Intel — the \`.dmg\` without \`arm64\` in the name"
+            echo
+            if [ "$MACOS_SIGNING_MODE" = "signed" ]; then
+              echo "This build is **code signed** with havenCo's Apple Developer ID."
+              echo "Notarization is a separate step — see \`docs/install-runbook.md\`."
+            else
+              echo "> **This build is not code signed or notarized.** macOS will refuse to open it"
+              echo "> on the first double-click and say it is from an unidentified developer."
+              echo "> Right-click the app in Applications and choose **Open**, then **Open** again."
+              echo "> Full walkthrough: \`docs/install-runbook.md\`."
+            fi
+            echo
+            echo "Install, first run, and how to connect to a Paperclip server:"
+            echo "[docs/install-runbook.md](https://github.com/${{ github.repository }}/blob/$RELEASE_TAG/docs/install-runbook.md)"
+          } > release/release-notes.md
+
+      # Two passes, because publish-macos-release-assets.mjs refuses to upload
+      # into a non-draft release: `staging` creates the draft and uploads the
+      # DMGs, ZIPs and blockmaps, `final` adds latest-mac.yml (the auto-update
+      # feed) and flips the draft to published only once everything is in place.
+      - name: Upload macOS assets to a draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/publish-macos-release-assets.mjs \
+            --mode staging \
+            --tag "$RELEASE_TAG" \
+            --input-dir release/mac-release-assets \
+            --notes-file release/release-notes.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/publish-macos-release-assets.mjs \
+            --mode final \
+            --tag "$RELEASE_TAG" \
+            --input-dir release/mac-release-assets \
+            --notes-file release/release-notes.md \
+            --publish
+
+      - name: Summarise
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Published \`$RELEASE_TAG\`"
+            echo
+            echo "- Release: https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG"
+            echo "- Signing: **${MACOS_SIGNING_MODE:-unknown}**"
+            echo
+            echo "Next: run \`smoke-packaged-macos.yml\` with \`tag=$RELEASE_TAG\` for arm64 and x64."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   build-linux:
     name: Build Linux release

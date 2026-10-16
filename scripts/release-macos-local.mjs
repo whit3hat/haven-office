@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const projectRoot = resolve(__dirname, "..");
@@ -28,6 +28,8 @@ const APP_ID = "xyz.havenco.haven-office";
 const COPYRIGHT = "Copyright © 2026 havenCo. Based on aronprins/paperclip-desktop, © 2026 Aron Prins (MIT).";
 const PUBLISH_OWNER = "whit3hat";
 const PUBLISH_REPO = "haven-office";
+// app-builder-lib treats the identity "-" as an ad-hoc signature.
+const ADHOC_IDENTITY = "-";
 
 const args = process.argv.slice(2);
 
@@ -73,31 +75,64 @@ function parseTeamId(identityName) {
   return identityName.match(/\(([A-Z0-9]+)\)\s*$/)?.[1] ?? null;
 }
 
-function resolveMacSigningIdentity() {
-  const explicitIdentity = process.env.APPLE_CODESIGN_IDENTITY?.trim() || process.env.CSC_NAME?.trim() || "";
-  const explicitTeamId = process.env.APPLE_TEAM_ID?.trim() || null;
-
-  if (explicitIdentity) {
-    return {
-      name: explicitIdentity,
-      teamId: explicitTeamId || parseTeamId(explicitIdentity),
-    };
-  }
-
+function findKeychainCodesigningIdentities() {
   const output = runQuiet("security", ["find-identity", "-v", "-p", "codesigning"]);
-  const identities = output
+  return output
     .split(/\r?\n/)
     .map((line) => line.match(/^\s*\d+\)\s+[0-9A-F]+\s+"(.+)"\s*$/))
     .filter(Boolean)
     .map((match) => match[1])
     .filter((name) => name.startsWith("Developer ID Application: "));
+}
+
+/**
+ * macOS signing for Haven Office has two paths, because an Apple Developer ID
+ * is a board decision that may not have landed yet (HAV-32):
+ *
+ *   signed   — an explicit `APPLE_CODESIGN_IDENTITY`/`CSC_NAME`, or exactly one
+ *              "Developer ID Application" identity in the active keychain.
+ *              Hardened runtime on, entitlements applied, notarization handled
+ *              afterwards by `notarize-submit.yml`.
+ *   unsigned — `ALLOW_UNSIGNED_MACOS_BUILD=true` with no explicit identity. The
+ *              app is still *ad-hoc* signed (`codesign --sign -`): a bundle with
+ *              no signature at all refuses to launch on Apple Silicon, while an
+ *              ad-hoc one launches behind the ordinary Gatekeeper "unidentified
+ *              developer" warning. Hardened runtime, entitlements and secure
+ *              timestamps are off on this path — all three need a real identity.
+ *
+ * An explicit identity always wins, so setting `ALLOW_UNSIGNED_MACOS_BUILD` on a
+ * machine that does have a Developer ID cannot silently downgrade a real release.
+ */
+export function resolveMacSigningIdentity({
+  env = process.env,
+  listCodesigningIdentities = findKeychainCodesigningIdentities,
+} = {}) {
+  const explicitIdentity = env.APPLE_CODESIGN_IDENTITY?.trim() || env.CSC_NAME?.trim() || "";
+  const explicitTeamId = env.APPLE_TEAM_ID?.trim() || null;
+
+  if (explicitIdentity) {
+    return {
+      name: explicitIdentity,
+      teamId: explicitTeamId || parseTeamId(explicitIdentity),
+      adhoc: false,
+    };
+  }
+
+  if (env.ALLOW_UNSIGNED_MACOS_BUILD === "true") {
+    return { name: null, teamId: null, adhoc: true };
+  }
+
+  const identities = listCodesigningIdentities();
 
   const matchingIdentities = explicitTeamId
     ? identities.filter((name) => name.includes(`(${explicitTeamId})`))
     : identities;
 
   if (matchingIdentities.length === 0) {
-    throw new Error("No Developer ID Application signing identity found in the active keychain.");
+    throw new Error(
+      "No Developer ID Application signing identity found in the active keychain. " +
+      "Set ALLOW_UNSIGNED_MACOS_BUILD=true to build an explicitly unsigned, ad-hoc signed app instead.",
+    );
   }
 
   if (matchingIdentities.length > 1) {
@@ -109,6 +144,7 @@ function resolveMacSigningIdentity() {
   return {
     name: matchingIdentities[0],
     teamId: explicitTeamId || parseTeamId(matchingIdentities[0]),
+    adhoc: false,
   };
 }
 
@@ -279,7 +315,24 @@ function buildStagePackageJson() {
   };
 }
 
-function buildStageConfig(arch) {
+export function buildStageConfig(arch, signingInfo) {
+  const macSigning = signingInfo.adhoc
+    ? {
+        // Ad-hoc signature. Hardened runtime stays off: with library validation
+        // on, an ad-hoc signed app refuses to load the ad-hoc signed `.node`
+        // bindings under Resources/app-server. `timestamp: "none"` is required
+        // too — codesign cannot reach a timestamp authority without a real
+        // identity, and @electron/osx-sign passes a bare `--timestamp` by default.
+        identity: ADHOC_IDENTITY,
+        hardenedRuntime: false,
+        timestamp: "none",
+      }
+    : {
+        hardenedRuntime: true,
+        entitlements: "build/entitlements.mac.plist",
+        entitlementsInherit: "build/entitlements.mac.inherit.plist",
+      };
+
   return {
     appId: APP_ID,
     productName: PRODUCT_NAME,
@@ -324,14 +377,12 @@ function buildStageConfig(arch) {
           arch: [arch],
         },
       ],
-      hardenedRuntime: true,
       gatekeeperAssess: false,
       notarize: false,
-      entitlements: "build/entitlements.mac.plist",
-      entitlementsInherit: "build/entitlements.mac.inherit.plist",
       signIgnore: [
         "/Contents/Resources/app-server/.*",
       ],
+      ...macSigning,
     },
     dmg: {
       contents: [
@@ -418,12 +469,18 @@ function installStageRuntimeDependencies(stageAppDir) {
 function buildStage(stageAppDir, arch, signingInfo) {
   console.log(`[release-local] Packaging staged macOS ${arch} build...`);
 
-  const env = {
-    ...process.env,
-    APPLE_CODESIGN_IDENTITY: signingInfo.name,
-  };
-  if (signingInfo.teamId) {
-    env.APPLE_TEAM_ID = signingInfo.teamId;
+  const env = { ...process.env };
+  if (signingInfo.adhoc) {
+    // `stage-after-pack.mjs` reads these to decide how to sign the nested
+    // app-server binaries that electron-builder's `signIgnore` skips.
+    env.ALLOW_UNSIGNED_MACOS_BUILD = "true";
+    delete env.APPLE_CODESIGN_IDENTITY;
+    delete env.CSC_NAME;
+  } else {
+    env.APPLE_CODESIGN_IDENTITY = signingInfo.name;
+    if (signingInfo.teamId) {
+      env.APPLE_TEAM_ID = signingInfo.teamId;
+    }
   }
   if (env.CSC_IDENTITY_AUTO_DISCOVERY === "") {
     delete env.CSC_IDENTITY_AUTO_DISCOVERY;
@@ -451,13 +508,25 @@ function buildStage(stageAppDir, arch, signingInfo) {
 
 function verifyStageArtifacts(archOutputDir, signingInfo) {
   console.log(`[release-local] Verifying staged macOS artifacts in ${archOutputDir}...`);
+
+  const env = { ...process.env };
+  if (signingInfo.adhoc) {
+    // There is no identity or team to assert on the unsigned path. The rest of
+    // verify-macos-release.mjs still runs: every Mach-O payload must carry a
+    // valid signature, and packaged native architectures must match the
+    // bundled Node binary.
+    delete env.APPLE_CODESIGN_IDENTITY;
+    delete env.APPLE_TEAM_ID;
+  } else {
+    env.APPLE_CODESIGN_IDENTITY = signingInfo.name;
+    if (signingInfo.teamId) {
+      env.APPLE_TEAM_ID = signingInfo.teamId;
+    }
+  }
+
   run("node", ["scripts/verify-macos-release.mjs", archOutputDir], {
     cwd: projectRoot,
-    env: {
-      ...process.env,
-      APPLE_CODESIGN_IDENTITY: signingInfo.name,
-      ...(signingInfo.teamId ? { APPLE_TEAM_ID: signingInfo.teamId } : {}),
-    },
+    env,
   });
 }
 
@@ -487,7 +556,7 @@ function buildArch(arch, outputRoot, keepStage, signingInfo) {
     );
     writeFileSync(
       join(stageAppDir, "electron-builder.json"),
-      `${JSON.stringify(buildStageConfig(arch), null, 2)}\n`,
+      `${JSON.stringify(buildStageConfig(arch, signingInfo), null, 2)}\n`,
       "utf8",
     );
 
@@ -542,9 +611,16 @@ function main() {
   ensureProjectDependencies(skipInstall);
   buildProjectArtifacts(skipBuild);
 
-  console.log(`[release-local] Using macOS signing identity: ${signingInfo.name}`);
-  if (signingInfo.teamId) {
-    console.log(`[release-local] Using Apple team ID: ${signingInfo.teamId}`);
+  if (signingInfo.adhoc) {
+    console.log(
+      "[release-local] UNSIGNED BUILD: no Apple identity, using an ad-hoc signature. " +
+      "macOS will warn that the app is from an unidentified developer on first open.",
+    );
+  } else {
+    console.log(`[release-local] Using macOS signing identity: ${signingInfo.name}`);
+    if (signingInfo.teamId) {
+      console.log(`[release-local] Using Apple team ID: ${signingInfo.teamId}`);
+    }
   }
 
   const results = [];
@@ -564,9 +640,11 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
 }

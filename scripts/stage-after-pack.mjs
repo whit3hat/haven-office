@@ -12,6 +12,9 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
+// codesign (and app-builder-lib) treat the identity "-" as an ad-hoc signature.
+const ADHOC_IDENTITY = "-";
+
 const MACH_O_MAGICS = new Set([
   "feedface",
   "cefaedfe",
@@ -232,10 +235,16 @@ function collectSignableBinaries(dir, out = []) {
 }
 
 function signTarget(target, identity, entitlements) {
-  const args = ["--force", "--options", "runtime"];
-  args.push("--timestamp");
+  // An ad-hoc identity has no certificate chain, so it cannot carry a secure
+  // timestamp, and hardened runtime + entitlements would only cause library
+  // validation to reject these same ad-hoc signatures at launch.
+  const adhoc = identity === ADHOC_IDENTITY;
+  const args = adhoc
+    ? ["--force", "--timestamp=none"]
+    : ["--force", "--options", "runtime", "--timestamp"];
+
   args.push("--sign", identity);
-  if (entitlements) {
+  if (entitlements && !adhoc) {
     args.push("--entitlements", entitlements);
   }
   args.push(target);
@@ -252,15 +261,26 @@ export default async function afterPack(context) {
     context.packager.info.buildResourcesDir,
     "entitlements.mac.inherit.plist",
   );
-  const signingIdentity = (
+  const explicitIdentity = (
     process.env.APPLE_CODESIGN_IDENTITY?.trim() ||
     process.env.CSC_NAME?.trim() ||
     ""
   );
+  const allowUnsignedMacBuild = process.env.ALLOW_UNSIGNED_MACOS_BUILD === "true";
 
-  if (!signingIdentity) {
-    throw new Error("staged macOS release signing requires APPLE_CODESIGN_IDENTITY or CSC_NAME.");
+  if (!explicitIdentity && !allowUnsignedMacBuild) {
+    throw new Error(
+      "staged macOS release signing requires APPLE_CODESIGN_IDENTITY or CSC_NAME. " +
+      "Set ALLOW_UNSIGNED_MACOS_BUILD=true for an explicitly unsigned, ad-hoc signed build.",
+    );
   }
+
+  // electron-builder's `signIgnore` skips everything under
+  // Contents/Resources/app-server, so these nested binaries are signed here in
+  // both modes — with the real Developer ID, or ad-hoc when we have none. They
+  // must carry *some* signature: an unsigned Mach-O payload fails
+  // `verify-macos-release.mjs` and will not load on Apple Silicon.
+  const signingIdentity = explicitIdentity || ADHOC_IDENTITY;
 
   stripBundleMetadata(appPath);
 
