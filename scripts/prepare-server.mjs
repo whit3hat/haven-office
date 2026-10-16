@@ -25,6 +25,11 @@ import {
   installDarwinEsbuildBinary,
   normalizeDarwinEsbuildBinaries,
 } from "./esbuild-normalization.mjs";
+import {
+  bundledPluginVersions,
+  fetchBundledPluginPackages,
+  stageBundledPlugins,
+} from "./stage-plugins.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -191,6 +196,31 @@ function promoteServerRuntimeDependencies(serverPkgDir, bundleServerDir) {
   );
 }
 
+/**
+ * Download the bundled plugin packages once, however many arches we stage.
+ */
+let bundledPluginSourceDir = null;
+function bundledPluginSource() {
+  bundledPluginSourceDir ??= fetchBundledPluginPackages({
+    downloadDir: path.join(stagingRootDir, "plugins"),
+    cwd: projectRoot,
+  });
+  return bundledPluginSourceDir;
+}
+
+function stagePluginsInto(bundleDir) {
+  if (bundledPluginVersions.length === 0) {
+    return;
+  }
+
+  try {
+    stageBundledPlugins({ bundleDir, sourceDir: bundledPluginSource() });
+  } catch (error) {
+    console.error(`[prepare-server] ERROR: ${error.message}`);
+    process.exit(1);
+  }
+}
+
 for (const arch of targetArches) {
   const variant = `${ebPlatform}-${arch}`;
   const stagingDir = path.join(stagingRootDir, variant);
@@ -275,6 +305,8 @@ for (const arch of targetArches) {
       );
     }
   }
+
+  stagePluginsInto(bundleDir);
 
   console.log(`[prepare-server] Scanning ${variant} bundle for Finder duplicate files...`);
   removeFinderDuplicates(bundleDir);

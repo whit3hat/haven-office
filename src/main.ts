@@ -27,6 +27,7 @@ import {
   shouldStopAttemptedServer,
 } from "./connection/local-server-lifecycle";
 import { probeLocalServerHealth } from "./connection/local-server-health";
+import { provisionBundledPlugins } from "./connection/plugin-provisioning";
 import { preflightRemoteConnection } from "./connection/preflight";
 import { ConnectionStore, getConnectionsFilePath } from "./connection/profiles";
 import { normalizeRemoteUrl } from "./connection/validate";
@@ -458,6 +459,39 @@ function resolvePaperclipHome(): string {
     userDataPath: app.getPath("userData"),
     pathExists: fs.existsSync,
   });
+}
+
+/**
+ * Where `prepare-server.mjs` stages the plugins that get preinstalled into the
+ * local server. In a packaged app that is `<Resources>/app-server/plugins`. In
+ * dev it is whatever the last `pnpm prepare-server` left under
+ * `build/server-bundle/<variant>/plugins`, so a dev run exercises the same
+ * packages the installer ships. `HAVEN_OFFICE_PLUGINS_DIR` overrides both.
+ */
+function resolveBundledPluginsRoot(): string {
+  const override = process.env.HAVEN_OFFICE_PLUGINS_DIR?.trim();
+  if (override) {
+    return path.resolve(override);
+  }
+
+  const root = getAppRoot();
+  if (app.isPackaged) {
+    return path.join(root, "plugins");
+  }
+
+  const bundleRoot = path.join(root, "build", "server-bundle");
+  try {
+    for (const variant of fs.readdirSync(bundleRoot).sort()) {
+      const candidate = path.join(bundleRoot, variant, "plugins");
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {
+    // No staged bundle in this checkout; nothing to preinstall.
+  }
+
+  return path.join(bundleRoot, "plugins");
 }
 
 function resolveTeamsCatalogDir(root: string): string {
@@ -1202,9 +1236,29 @@ async function bootLocal(options: {
     }
 
     sendBootStatus("server", "Server is ready", 70);
-    sendBootStatus("ready", "Loading the UI...", 80);
 
     const allowedOrigin = new URL(`http://localhost:${serverPort}`).origin;
+    // Preinstall the bundled plugins before the window loads: the start path
+    // defaults to the office, which only exists once its plugin is installed.
+    sendBootStatus("server", "Preparing the office...", 75);
+    await provisionBundledPlugins({
+      origin: allowedOrigin,
+      pluginsRoot: resolveBundledPluginsRoot(),
+    });
+    if (bootId !== bootSequence) {
+      if (shouldStopAttemptedServer(nextServerProcess, serverProcess)) {
+        await killChildProcess(nextServerProcess);
+        if (shouldRestorePreviousTrackedServer(previousServerProcess, nextServerProcess, serverProcess)) {
+          trackServerProcess(previousServerProcess);
+        } else {
+          trackServerProcess(null);
+        }
+      }
+      return;
+    }
+
+    sendBootStatus("ready", "Loading the UI...", 80);
+
     // Land on the remembered view, defaulting to the office on first run.
     const startUrl = resolveStartUrl({
       allowedOrigin,

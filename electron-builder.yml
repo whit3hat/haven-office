@@ -47,6 +47,13 @@ extraResources:
       - "**/*"
   - from: build/server-bundle/${os}-${arch}/server/package.json
     to: app-server/server/package.json
+  # Plugins preinstalled into the local server on first launch. Deliberately
+  # outside app-server/packages/plugins so the server treats them as ordinary
+  # local-path installs and never tries to build them inside the bundle.
+  - from: build/server-bundle/${os}-${arch}/plugins
+    to: app-server/plugins
+    filter:
+      - "**/*"
   # Bundled Node.js binary (arch-specific, selected at build time)
   - from: "build/node-bin/${os}-${arch}"
     to: app-server/node-bin
