@@ -5,6 +5,7 @@
 
 <p align="center">
   <a href="#quickstart"><strong>Quickstart</strong></a> &middot;
+  <a href="./docs/install-runbook.md"><strong>Install runbook</strong></a> &middot;
   <a href="./UPSTREAM.md"><strong>Upstream provenance</strong></a> &middot;
   <a href="https://github.com/paperclipai/paperclip"><strong>Paperclip (upstream)</strong></a> &middot;
   <a href="https://docs.paperclip.ing/"><strong>Paperclip docs</strong></a>
@@ -64,14 +65,30 @@ upstream project and its authors; all credit for the shell goes to `paperclip-de
 
 ### Install the desktop app
 
-Download the latest installer for your platform from the [Releases page](https://github.com/whit3hat/haven-office/releases):
+**→ Full step-by-step instructions: [docs/install-runbook.md](./docs/install-runbook.md).**
+Read that if you are installing this for the first time; the summary below is the short form.
 
-- **macOS** — `.dmg` (Apple Silicon and Intel)
-- **Windows** — _coming soon_
-- **Linux** — _coming soon_
+Download the installer from the [Releases page](https://github.com/whit3hat/haven-office/releases):
 
-Open the app. The bundled Paperclip server starts automatically and the dashboard opens in the
-app window. That's it.
+- **macOS** — `.dmg`, one for Apple Silicon (`arm64` in the filename) and one for Intel
+- **Windows** — _not published yet_
+- **Linux** — _not published yet_
+
+Drag **Haven Office** into **Applications** and open it. The launcher offers two modes:
+
+- **Local** — click *Launch* and the bundled Paperclip server starts inside the app. No
+  terminal, no `pnpm install`, no Node.js setup.
+- **Remote** — point it at a Paperclip server you already run. For havenCo that is
+  `https://paperclip.lab.havenco.xyz`; the app verifies the origin before loading it, and
+  you sign in inside the app window.
+
+Either way the window opens on the company office (`/{prefix}/office`), not the server root.
+
+> **Until havenCo has an Apple Developer ID, the macOS builds are not code signed**, so macOS
+> refuses the first double-click and reports an unidentified developer. Right-click the app in
+> Applications → **Open** → **Open**. This is expected, happens once, and is walked through in
+> [the install runbook](./docs/install-runbook.md#3a-first-open--the-gatekeeper-warning).
+> Each release's notes state whether that build is signed.
 
 ### Prefer to run Paperclip yourself?
 
@@ -121,6 +138,30 @@ Key files:
 - `electron-builder.yml` — Packaging config and app identity; bundles the `@paperclipai/server` npm package plus a platform-specific Node.js binary into `Resources/app-server/`
 - `build/branding/make-icons.py` — Regenerates `build/icon.png` and `build/icon.ico` from the Haven marks
 - `scripts/` — Build and release automation (server staging, macOS notarization, etc.)
+
+<br/>
+
+## Releases
+
+Versions are **CalVer — `YYYY.M.N`**, tagged `v<version>`. Upstream's `3.x` tags all exist in
+this repo already, so continuing that numbering is not available to us; see
+[the runbook](./docs/install-runbook.md#version-numbers).
+
+Releases are **manually dispatched**, not triggered by a tag push — the workflows are
+upstream's, kept in upstream's shape so rebases stay cheap. In short: bump the version, push a
+`v…` tag, then run **Release Desktop** with `ref=<that tag>` and `platforms=mac`. Dispatching
+with `ref=master` builds and verifies but publishes nothing.
+
+- **[docs/install-runbook.md § 7](./docs/install-runbook.md#7-cutting-a-release)** — the
+  release procedure, start to finish
+- **[docs/install-runbook.md § 6](./docs/install-runbook.md#6-what-a-human-must-add-before-a-signed-release-is-possible)**
+  — the checklist of Apple secrets a human must add, and exactly which workflow reads each one
+- **[docs/development/release-runbook.md](./docs/development/release-runbook.md)** — pinning
+  the bundled Paperclip server, notarization, stapling, staged rollout
+
+macOS builds are signed only when all three Apple signing secrets are present; otherwise the
+build succeeds as an unsigned, ad-hoc signed app and says so in its run summary and release
+notes. Signing is a board decision tracked on HAV-32.
 
 <br/>
 

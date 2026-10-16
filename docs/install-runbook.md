@@ -1,0 +1,410 @@
+# Haven Office — install and release runbook
+
+Written for a teammate with a Mac and no prior context. Parts 1–5 are for installing and
+using the app. Parts 6–8 are for whoever cuts the next release.
+
+> **macOS only for now.** There is no Windows or Linux build published yet. The packaging
+> for both exists in `release.yml` but nobody has run it, so treat it as untested.
+
+---
+
+## 1. What this is, and what it is not
+
+**Haven Office is a window.** It is an [Electron](https://www.electronjs.org/) desktop shell
+around a [Paperclip](https://github.com/paperclipai/paperclip) server, branded for havenCo
+and pointed at havenCo's own releases. It can either
+
+- run a **local** Paperclip server bundled inside the app (no terminal, no install steps), or
+- connect to a **remote** Paperclip server you already run — for havenCo, that is
+  `https://paperclip.lab.havenco.xyz`.
+
+**It is not Paperclip, and it does not change Paperclip.** Everything the app can actually
+*do* — agents, companies, issues, budgets, governance — is the upstream Paperclip server,
+shipped unmodified via the `@paperclipai/server` npm package. If something inside the window
+behaves oddly, that is almost always Paperclip, not this shell. See
+[`UPSTREAM.md`](../UPSTREAM.md).
+
+**It is not an official release of anything.** Not of Paperclip, and not of
+[`aronprins/paperclip-desktop`](https://github.com/aronprins/paperclip-desktop), the shell
+this repo is a downstream copy of. It is havenCo's internal distribution.
+
+**It runs AI agents that can spend real money.** Read the disclaimer in
+[`README.md`](../README.md#disclaimer--use-at-your-own-risk) before you connect it to
+anything.
+
+---
+
+## 2. Before you start
+
+| You need | Notes |
+|---|---|
+| A Mac | Apple Silicon (M1 or later) or Intel. macOS 11+ — the app is built against Electron 41. |
+| ~1.5 GB free disk | The app bundles a Paperclip server, its `node_modules`, a Node runtime and an embedded Postgres. It is a large `.dmg` by normal standards. This is expected. |
+| For remote mode: an account on `paperclip.lab.havenco.xyz` | That server is a **private** deployment in authenticated mode. If you have never signed in, ask for an invite before installing — the app cannot create one. |
+
+Nothing else. No Node.js, no `pnpm`, no terminal.
+
+---
+
+## 3. Install the `.dmg`
+
+1. Go to the [Releases page](https://github.com/whit3hat/haven-office/releases) and open the
+   newest release.
+2. Download the `.dmg` that matches your Mac:
+   - **Apple Silicon** (M1/M2/M3/M4) → the file with `arm64` in the name,
+     e.g. `Haven-Office-<version>-arm64.dmg`
+   - **Intel** → the `.dmg` *without* `arm64`, e.g. `Haven-Office-<version>.dmg`
+
+   Not sure which you have?  → Apple menu → **About This Mac**. "Apple M…" means Apple
+   Silicon.
+3. Double-click the `.dmg`. A window opens with the **Haven Office** app on the left and an
+   **Applications** shortcut on the right.
+4. Drag **Haven Office** onto **Applications**.
+5. Eject the disk image (click the ⏏ next to it in Finder's sidebar). You can delete the
+   `.dmg` afterwards.
+
+### 3a. First open — the Gatekeeper warning
+
+**Check the release notes for whether the build is signed.** They say so explicitly, and the
+release workflow's run summary says which path it took.
+
+**If the build is unsigned** (which it is until havenCo has an Apple Developer ID — tracked on
+[HAV-32](/HAV/issues/HAV-32)), the first double-click will **not** open the app. macOS shows
+something like:
+
+> **"Haven Office" cannot be opened because Apple cannot check it for malicious software.**
+> This software needs to be updated. Contact the developer for more information.
+
+or
+
+> **"Haven Office" can't be opened because it is from an unidentified developer.**
+
+This is expected and it is not a sign that the download is broken. To open it:
+
+1. Open **Applications** in Finder.
+2. **Right-click** (or Control-click) **Haven Office** → **Open**.
+3. The same warning appears, but now with an **Open** button. Click **Open**.
+
+macOS remembers the decision. Every later launch is a normal double-click.
+
+If right-click → **Open** does not offer that button on macOS 15 (Sequoia) or later, use
+ **System Settings** → **Privacy & Security**, scroll to the bottom, and click **Open Anyway**
+next to the Haven Office message, then try again.
+
+<details>
+<summary>What exactly is unsigned, and is it safe?</summary>
+
+The app carries an *ad-hoc* code signature rather than no signature at all — a bundle with no
+signature whatsoever refuses to launch on Apple Silicon outright. An ad-hoc signature proves
+the app has not been modified since it was built, but it does not prove **who** built it, and
+it has not been notarized (sent to Apple for an automated malware scan). That is what
+Gatekeeper is objecting to.
+
+So: the warning is accurate. The thing that makes it safe is that you downloaded the `.dmg`
+from `github.com/whit3hat/haven-office`, built by a GitHub Actions run you can inspect, from a
+commit you can read. Verify that rather than trusting the dialog. When havenCo has a Developer
+ID the warning goes away on its own, with no change to this runbook other than this section
+becoming moot.
+</details>
+
+**If the build is signed**, the app opens on the first double-click with no warning.
+
+---
+
+## 4. First run
+
+The app opens a small launcher window with two tabs, **Local** and **Remote**.
+
+### 4a. Local mode — a Paperclip server inside the app
+
+Click **Launch** under *Run Local Server*. You will see four steps go by:
+*Initializing → Starting database → Starting server → Loading interface*, plus a
+*Preparing the office* step. The whole thing takes a minute or two on the very first launch,
+because the embedded Postgres has to initialize its data directory.
+
+The window then lands on the **office** view (`/HAV/office`), not the Paperclip dashboard
+root. The office is a plugin (`paperclip-office`) that ships inside the app and is installed
+into the local server automatically on first boot — there is no terminal step. See
+[`local-mode-plugin.md`](local-mode-plugin.md) for how that works and how to turn it off.
+
+Tick **Always start local on launch** if you want to skip the chooser next time.
+
+Local data lives in:
+
+- `~/.paperclip` if you already use the Paperclip CLI (the app shares its data), otherwise
+- `~/Library/Application Support/Haven Office`
+
+### 4b. Remote mode — connect to havenCo's server
+
+This is the mode most of the team wants.
+
+1. Click the **Remote** tab, then **Connect to Remote**.
+2. In **Remote URL**, enter:
+
+   ```
+   https://paperclip.lab.havenco.xyz
+   ```
+
+3. Click **Verify Remote**. The app calls that server's `/api/health` and
+   `/api/auth/get-session` before it will load anything, and should report
+   *"Verified authenticated Paperclip remote detected."*
+4. Optionally give it a **Display name** — e.g. `havenCo lab` — so it is easy to pick from
+   saved connections later. Tick **Reconnect to this remote on launch** to make it the
+   default.
+5. Click **Connect & Save**.
+
+The window opens the remote server in a restricted Electron window locked to that exact
+origin: the app will not follow a link off `paperclip.lab.havenco.xyz`.
+
+#### Signing in
+
+Sign-in happens **inside** the app window, using the server's own login page — the shell has
+no login of its own and stores no password. Use the same credentials you would use in a
+browser against that URL.
+
+If you have no account, you need an invite from a board member of that Paperclip instance.
+The app cannot bootstrap one; verification will succeed and you will simply land on a
+sign-out state.
+
+Once signed in, the window lands on `/HAV/office`. The **View** menu switches between
+**Office** and **Board**. The app remembers the last view per connection and reopens there.
+
+> **HTTP is blocked by default.** If you ever point this at an `http://` URL, the app refuses
+> until you explicitly tick *"I understand the risk and want to allow this HTTP connection"*.
+> Do not do that for anything outside a local network.
+
+---
+
+## 5. Auto-updates
+
+The app checks `whit3hat/haven-office` GitHub Releases for a newer version **on launch and
+then every 4 hours**, and you can force a check from the menu (**Check for Updates…**).
+
+- It does **not** download silently in the background on a manual check — it asks first.
+- On a scheduled check it downloads automatically, then prompts you to restart.
+- Choosing *Later* keeps the update staged; it installs the next time you quit.
+- The update feed is `latest-mac.yml`, published as an asset on each release. A release
+  without that file is invisible to the updater; see part 7.
+- Before any release exists, update checks log a 404 and report "up to date". That is handled
+  deliberately, not a bug.
+
+Updates are only checked in packaged builds — a `pnpm dev` run never updates itself.
+
+**An update inherits the signing state of the release it came from.** If the running app is
+unsigned and the new release is unsigned, the update applies without a Gatekeeper prompt
+(macOS already trusts the app you opened). The first *signed* release will replace the app
+with a signed one, which is strictly an improvement.
+
+---
+
+## 6. What a human must add before a signed release is possible
+
+**No agent holds Apple credentials and none are committed to this repo.** A person with
+access to havenCo's Apple Developer account must add these as **repository secrets**
+(Settings → Secrets and variables → Actions → Repository secrets) *and* make them available to
+the `release` [GitHub Environment](https://github.com/whit3hat/haven-office/settings/environments),
+because `build-mac`, `notarize-submit` and `notarize-status` all declare `environment: release`.
+
+### Checklist — code signing (needed for a signed `.dmg`)
+
+- [ ] **`APPLE_CODESIGN_IDENTITY`** — the full identity string, exactly as
+      `security find-identity -v -p codesigning` prints it, including the team in
+      parentheses. Example shape:
+      `Developer ID Application: havenCo Ltd (ABCDE12345)`
+- [ ] **`MAC_CERTIFICATE_P12_BASE64`** — the *Developer ID Application* certificate **and its
+      private key**, exported from Keychain Access as a `.p12`, then base64-encoded
+      (`base64 -i cert.p12 | pbcopy`). Whitespace and line breaks are tolerated.
+- [ ] **`MAC_CERTIFICATE_PASSWORD`** — the password set on that `.p12` export.
+- [ ] *(optional)* **`APPLE_TEAM_ID`** — the 10-character team ID. Omit it and the build
+      parses it out of `APPLE_CODESIGN_IDENTITY`; set it only if that parse is wrong.
+
+### Checklist — notarization (needed to remove the Gatekeeper warning)
+
+Signing alone is not enough: Gatekeeper still warns about a signed-but-not-notarized app
+downloaded from the internet. Notarization needs an **App Store Connect API key**
+(Users and Access → Integrations → App Store Connect API), with the *Developer* role or
+higher.
+
+- [ ] **`APPLE_API_KEY_ID`** — the key ID, e.g. `2X9…`.
+- [ ] **`APPLE_API_ISSUER`** — the issuer UUID shown on the same page.
+- [ ] **`APPLE_API_KEY_P8`** — the contents of the downloaded `AuthKey_<KEYID>.p8`. Either the
+      raw PEM text, or base64 of it; `notarize-submit.yml` accepts both and also repairs
+      literal `\n` escapes.
+
+### What each workflow actually reads
+
+Everything below is inherited from upstream; this is an inventory, not a design.
+
+| Workflow | Reads | Required for it to run? |
+|---|---|---|
+| `release.yml` → `build-mac` | `APPLE_CODESIGN_IDENTITY`, `MAC_CERTIFICATE_P12_BASE64`, `MAC_CERTIFICATE_PASSWORD`, `APPLE_TEAM_ID` | **No.** All four absent → unsigned ad-hoc build. All three of the first group present → signed build. There is no half-state: the job prints which path it took to the run summary. |
+| `release.yml` → `publish-mac` | `GITHUB_TOKEN` (automatic) | Nothing to add. |
+| `release.yml` → `build-linux`, `build-windows` | nothing | Windows builds are **unsigned**; see [`windows-signing-guide.md`](development/windows-signing-guide.md). |
+| `release.yml` → `publish-release` | `GITHUB_TOKEN` (automatic) | Windows/Linux only — it is skipped whenever `build-mac` runs. |
+| `smoke-packaged-macos.yml` | `GITHUB_TOKEN` (automatic) | Nothing to add. Works against draft and published releases. |
+| `notarize-submit.yml` | `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, `APPLE_API_KEY_P8`, `GITHUB_TOKEN` | **Yes** — all three Apple values. The job fails immediately without them. |
+| `notarize-status.yml` | `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` | **Yes**, same three. |
+
+No workflow reads a repository *variable* (`vars.*`). Owner and repo are not configurable:
+they are hard-coded as `whit3hat` / `haven-office` in `electron-builder.yml`, in
+`buildStageConfig` in `scripts/release-macos-local.mjs`, and resolved from
+`github.repository` everywhere else.
+
+### Also needed from a human, regardless of signing
+
+- [ ] A **`release` GitHub Environment** must exist on the repo. `build-mac`,
+      `notarize-submit` and `notarize-status` declare `environment: release` and will fail to
+      start without it. It needs no protection rules to work; add required reviewers if you
+      want release builds gated.
+- [ ] Someone with a **Mac** must actually install the `.dmg` and confirm the app opens and
+      reaches a Paperclip server. No agent and no CI job can do this. The packaged smoke test
+      (part 7, step 4) proves the bundled server boots; it does not prove the UI renders.
+
+---
+
+## 7. Cutting a release
+
+**The workflows are manually dispatched (`workflow_dispatch`), not triggered by pushing a
+tag.** That is deliberate and we kept upstream's shape:
+
+- it matches upstream exactly, so rebasing onto upstream stays cheap — and keeping rebases
+  cheap is the stated reason this repo exists as a thin downstream ([`UPSTREAM.md`](../UPSTREAM.md));
+- a macOS release is not one button. Signing, notarization and stapling are separate
+  credentialed steps that happen *between* build and publish, so an automatic trigger would
+  have to be interrupted anyway;
+- pushing a tag is cheap and reversible; starting a signed release by accident is not.
+
+The cost is that every release needs someone to click **Run workflow**. For a team release
+cadence measured in weeks, that is the right trade. Revisit it if releases become frequent
+enough that the clicking is the bottleneck.
+
+### Version numbers
+
+Haven Office uses **CalVer: `YYYY.M.N`** — e.g. `2026.10.0`, tagged `v2026.10.0`.
+
+It does **not** continue upstream's `3.x` numbering, for a concrete reason: this repo contains
+the entire upstream history including every upstream tag, so `v3.2.15` and all its siblings
+already exist on `origin` and cannot be reused. A `3.x` scheme would collide the moment
+upstream ships the same number. CalVer cannot collide with upstream's `3.x` line, ever, and
+it still sorts monotonically for `electron-updater`, which compares versions as semver.
+
+`N` is the release number within that month, starting at `0`. The bundled upstream Paperclip
+server version is independent of this and is recorded in
+[`development/release-runbook.md`](development/release-runbook.md).
+
+### Steps
+
+1. **Bump the version and push it.**
+
+   ```sh
+   pnpm pkg set "version=<YYYY.M.N>"
+   git commit -am "release: v<YYYY.M.N>"
+   git push origin master
+   ```
+
+   If you also want to move the bundled Paperclip server version, do that first and follow
+   [`development/release-runbook.md`](development/release-runbook.md) — it covers pinning
+   `@paperclipai/server`, and that is the more delicate half of a release.
+
+2. **Create and push the tag.** `publish-mac` will not run for a ref that is not a `v…` tag,
+   and the upload script uses `gh release create --verify-tag`, so the tag must exist on
+   GitHub *before* the workflow runs.
+
+   ```sh
+   git tag -a v<YYYY.M.N> -m "v<YYYY.M.N>"
+   git push origin v<YYYY.M.N>
+   ```
+
+3. **Dispatch `Release Desktop`.** Actions → **Release Desktop** → **Run workflow**:
+
+   | Input | Value |
+   |---|---|
+   | `ref` | `v<YYYY.M.N>` — the tag you just pushed |
+   | `platforms` | `mac` |
+
+   Takes roughly 40–60 minutes: it builds x64 and arm64 from scratch, each with its own
+   staged `npm install` of the bundled server.
+
+   The run does three things in order:
+
+   - `build-mac` prints **signed** or **unsigned** to the run summary, builds both arches
+     via `pnpm release:mac:local`, and runs `scripts/verify-macos-release.mjs` on each — which
+     checks every Mach-O payload is signed, that packaged native binaries match the bundled
+     Node architecture, and that the bundled server has its UI, dependencies and catalog
+     manifests. **If that fails, the release stops here.** That is the intended behaviour.
+   - it merges both arches' `latest-mac.yml` into one updater manifest
+     (`prepare-macos-release-assets.mjs`).
+   - `publish-mac` creates a draft release at your tag, uploads the DMGs, ZIPs and blockmaps,
+     then adds `latest-mac.yml` and flips the draft to published.
+
+   > **Dispatching with `ref=master` publishes nothing.** It builds and verifies and leaves a
+   > CI artifact. That is the right way to test a change to the release pipeline without
+   > creating a release.
+
+4. **Run the packaged smoke test.** Actions → **Smoke Packaged macOS Release** → **Run
+   workflow**, with `tag=v<YYYY.M.N>`. Run it **twice**, once with `arch=arm64` and once with
+   `arch=x64`, because each runs on a native runner of that architecture.
+
+   It downloads the release's ZIP, launches the real packaged app with an isolated
+   `userData` and `PAPERCLIP_HOME`, and asserts the bundled server comes up and serves
+   `/get-session`, `/api/skills/catalog` and `/api/teams/catalog` — and that the app never
+   touched the production data directories.
+
+   Record both results on the release issue. A green smoke test plus a green
+   `verify-macos-release` is the bar for telling the team to install.
+
+5. **Notarize — only if the build is signed.** Skip this entirely for an unsigned build;
+   there is nothing to notarize. Otherwise follow
+   [`development/release-runbook.md`](development/release-runbook.md), which covers
+   `notarize-submit.yml`, `notarize-status.yml`, stapling, and re-uploading the stapled
+   assets. Do not announce a signed release before `xcrun stapler validate` passes.
+
+6. **Tell the team**, and say plainly whether the build is signed. If it is not, link part 3a
+   of this document in the same message — otherwise the first person to double-click it will
+   reasonably assume the download is broken.
+
+### If you need to undo a release
+
+Releases are reversible. Deleting the GitHub release (or marking it a draft again) removes
+`latest-mac.yml` from the feed, and the updater immediately stops offering it. Anyone who
+already installed it keeps it; publish a higher version to move them.
+
+---
+
+## 8. Troubleshooting
+
+| Symptom | What to do |
+|---|---|
+| **"cannot be opened because Apple cannot check it"** | Expected on an unsigned build. Part 3a. |
+| **"The application is damaged and can't be opened"** | Not the Gatekeeper warning — this one means the download is actually corrupt, or the app was modified after signing. Re-download the `.dmg`. |
+| **Wrong architecture** — app is very slow, or won't start | You installed the Intel `.dmg` on Apple Silicon or vice versa. Check About This Mac, delete the app, install the other one. |
+| **Local mode hangs on "Starting database"** | First launch initializes an embedded Postgres and is slow. If it is still stuck after ~5 minutes, check the server log (below). |
+| **Local mode opens but the office page 404s** | The bundled office plugin failed to install. The app deliberately opens anyway rather than refusing to launch. Check the server log for `[plugins]`, and see [`local-mode-plugin.md`](local-mode-plugin.md). Use the **View → Board** menu item to get a working view meanwhile. |
+| **Remote verification fails** | The app tells you which check failed. A private authenticated deployment redacting fields is fine and still verifies; a wrong host or an offline server is not. Confirm the URL works in a browser first. |
+| **Signed in on the web but not in the app** | Sessions are not shared with your browser. Sign in inside the app window. |
+| **No updates ever offered** | Check that the newest release has a `latest-mac.yml` asset and is not a draft or prerelease. |
+
+**The server log** is the first place to look for anything local-mode related:
+
+```sh
+open ~/Library/Application\ Support/Haven\ Office/server.log
+```
+
+(or `~/.paperclip/…` if the app is sharing data with the Paperclip CLI — the launcher prints
+which `PAPERCLIP_HOME` it resolved.)
+
+To start completely fresh, quit the app and move that whole directory aside. **This deletes
+all local Paperclip data**, which has no backup.
+
+---
+
+## Related documents
+
+- [`README.md`](../README.md) — what the app is, development commands, licences
+- [`UPSTREAM.md`](../UPSTREAM.md) — provenance, the upstream sync path, why `master`
+- [`development/release-runbook.md`](development/release-runbook.md) — the full upstream
+  release procedure: pinning the bundled server, notarization, stapling, staged rollout
+- [`development/macos-staged-release.md`](development/macos-staged-release.md) — how the
+  staged macOS build works and why it exists
+- [`local-mode-plugin.md`](local-mode-plugin.md) — the bundled office plugin
+- [`baseline.md`](baseline.md) — what this repo was verified to do, and on what
