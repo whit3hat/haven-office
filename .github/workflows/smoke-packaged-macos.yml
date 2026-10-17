@@ -15,6 +15,10 @@ on:
           - arm64
           - x64
 
+# Run this after "Release Desktop" has published a tag: docs/install-runbook.md
+# part 7. GitHub only registers a dispatchable workflow when the file changes on
+# the default branch, which is why this comment exists at all — the repo seed
+# push left this file unregistered and `workflow_dispatch` 404'd.
 permissions:
   contents: write
 

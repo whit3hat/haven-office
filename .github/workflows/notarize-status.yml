@@ -10,6 +10,9 @@ on:
         description: Apple notarization submission ID for arm64
         required: true
 
+# Future, signed path only — it needs the Apple notarization secrets listed in
+# docs/install-runbook.md part 6. Same registration note as
+# smoke-packaged-macos.yml: the seed push left this file unregistered.
 permissions:
   contents: read
 
