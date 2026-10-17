@@ -25,6 +25,7 @@ import {
   installDarwinEsbuildBinary,
   normalizeDarwinEsbuildBinaries,
 } from "./esbuild-normalization.mjs";
+import { assertSupportedNpm } from "./npm-preflight.mjs";
 import {
   bundledPluginVersions,
   fetchBundledPluginPackages,
@@ -60,6 +61,15 @@ console.log(`[prepare-server] Target server version: @paperclipai/server@${serve
 console.log(
   `[prepare-server] Target teams catalog version: @paperclipai/teams-catalog@${teamsCatalogVersion}`,
 );
+
+// Fails here rather than 20 seconds into an npm install that prints no usable
+// cause. See scripts/npm-preflight.mjs.
+try {
+  console.log(`[prepare-server] Using npm ${assertSupportedNpm({ execFileSync })}.`);
+} catch (error) {
+  console.error(`[prepare-server] ERROR: ${error.message}`);
+  process.exit(1);
+}
 
 const platform = process.platform;
 const nodePlatform = platform === "win32" ? "win32" : platform;

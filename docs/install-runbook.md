@@ -325,6 +325,13 @@ server version is independent of this and is recorded in
    Takes roughly 40–60 minutes: it builds x64 and arm64 from scratch, each with its own
    staged `npm install` of the bundled server.
 
+   That staged install **needs npm 11 or newer.** npm 10 — the version bundled with Node 22 —
+   crashes partway through it with `Cannot read properties of null (reading 'edgesOut')`,
+   naming no package and no cause (reproduced on 10.9.9, fixed on 11.19.0). The three build
+   jobs install `npm@11.19.0` before building, and `scripts/npm-preflight.mjs` fails the
+   build up front with that explanation if something ever runs it on npm 10. If you build on
+   your own Mac, `npm install -g npm@11` first.
+
    The run does three things in order:
 
    - `build-mac` prints **signed** or **unsigned** to the run summary, builds both arches

@@ -50,6 +50,14 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # Node 22 ships npm 10.9.x, whose dependency resolver crashes with
+      # "Cannot read properties of null (reading 'edgesOut')" while
+      # scripts/prepare-server.mjs installs @paperclipai/server. Reproduced on
+      # 10.9.9, fixed on 11.19.0. Drop this step once node-version ships
+      # npm >= 11; scripts/npm-preflight.mjs enforces the floor either way.
+      - name: Pin npm 11 for the bundled-server install
+        run: npm install -g npm@11.19.0
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -276,6 +284,14 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # Node 22 ships npm 10.9.x, whose dependency resolver crashes with
+      # "Cannot read properties of null (reading 'edgesOut')" while
+      # scripts/prepare-server.mjs installs @paperclipai/server. Reproduced on
+      # 10.9.9, fixed on 11.19.0. Drop this step once node-version ships
+      # npm >= 11; scripts/npm-preflight.mjs enforces the floor either way.
+      - name: Pin npm 11 for the bundled-server install
+        run: npm install -g npm@11.19.0
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -312,6 +328,14 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+
+      # Node 22 ships npm 10.9.x, whose dependency resolver crashes with
+      # "Cannot read properties of null (reading 'edgesOut')" while
+      # scripts/prepare-server.mjs installs @paperclipai/server. Reproduced on
+      # 10.9.9, fixed on 11.19.0. Drop this step once node-version ships
+      # npm >= 11; scripts/npm-preflight.mjs enforces the floor either way.
+      - name: Pin npm 11 for the bundled-server install
+        run: npm install -g npm@11.19.0
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
