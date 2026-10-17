@@ -173,6 +173,29 @@ Once signed in, the window lands on `/HAV/office`. The **View** menu switches be
 > until you explicitly tick *"I understand the risk and want to allow this HTTP connection"*.
 > Do not do that for anything outside a local network.
 
+### 4c. The first-launch check — please confirm these four things
+
+The office-first start path has unit tests but has never been seen running: no agent on this
+project has a Mac or a display, so the first person to install the `.dmg` is the first person
+to watch the window open. If any of the four below is wrong, say so on the issue — it is a
+regression in the start-path work, not an install problem, and it gets fixed in code.
+
+| # | What to do | What should happen |
+|---|---|---|
+| 1 | Connect and sign in (§ 4b) | The window lands on **`/HAV/office`** — the office, not the issue board and not the dashboard root |
+| 2 | Look at the office view | The office actually renders — rooms and desks, not a blank pane, a spinner that never resolves, or a 404 |
+| 3 | Press **`Cmd+1`**, then **`Cmd+2`** | `Cmd+1` → the office (`/HAV/office`); `Cmd+2` → the board (`/HAV/issues`). Both are also in the **View** menu, which is the thing to try if a shortcut is swallowed by the page |
+| 4 | Switch to **Board**, quit with `Cmd+Q`, reopen the app | It reopens on the **board**, not the office — the last view is remembered. Switch back to Office, quit, reopen, and it should come back on the office |
+
+Two notes on what is *not* a fault:
+
+- **The remembered view is per connection**, stored as `lastViewPath` against that saved
+  connection profile ([`src/connection/profiles.ts`](../src/connection/profiles.ts)). Local
+  mode and a remote each remember their own, so they can legitimately differ.
+- **Only the path is stored, never the origin.** A remembered view can never send the window
+  to a different host; if a stored path fails the origin check it is discarded and you land on
+  the office instead. Falling back to the office is the designed behaviour, not an error.
+
 ---
 
 ## 5. Auto-updates
