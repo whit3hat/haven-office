@@ -55,6 +55,35 @@ function run(command, commandArgs, options = {}) {
   }
 }
 
+// macOS ships a 256-descriptor soft limit per process, and electron-builder
+// walks the whole staged tree in parallel while it writes the dmg and the
+// updater zip. A bundle this size — embedded Postgres, the agent SDKs, the
+// server's own node_modules — exhausts it: `Release Desktop` #2 died with
+// `EMFILE: too many open files` immediately after the ad-hoc signature landed.
+//
+// Node cannot raise its own rlimit, so the packaging child is spawned through a
+// shell that walks the soft limit up to whatever the hard limit allows first.
+// A child inherits the raised limit; everything else about the call is
+// unchanged, and `"$@"` hands the argv over without a quoting round-trip.
+const FILE_LIMIT_LADDER = [65536, 32768, 16384, 8192, 4096, 2048];
+
+const RAISE_FILE_LIMIT_SH = `
+for limit in ${FILE_LIMIT_LADDER.join(" ")}; do
+  if ulimit -n "$limit" 2>/dev/null; then break; fi
+done
+echo "[release-local] file descriptor soft limit: $(ulimit -n)"
+exec "$@"
+`.trim();
+
+export function withRaisedFileLimit(command, commandArgs, { platform = process.platform } = {}) {
+  // Only macOS sets the limit low enough to matter; Linux runners start at
+  // 65536 and the indirection would just obscure the failing command.
+  if (platform !== "darwin") return { command, commandArgs };
+
+  // The literal `sh` is $0 for the inline script, so the real argv starts at $1.
+  return { command: "/bin/sh", commandArgs: ["-c", RAISE_FILE_LIMIT_SH, "sh", command, ...commandArgs] };
+}
+
 function runQuiet(command, commandArgs, options = {}) {
   const result = spawnSync(command, commandArgs, {
     encoding: "utf8",
@@ -486,24 +515,22 @@ function buildStage(stageAppDir, arch, signingInfo) {
     delete env.CSC_IDENTITY_AUTO_DISCOVERY;
   }
 
-  run(
-    "pnpm",
-    [
-      "exec",
-      "electron-builder",
-      "--projectDir",
-      stageAppDir,
-      "--config",
-      join(stageAppDir, "electron-builder.json"),
-      "--mac",
-      `--${arch}`,
-      "--publish",
-      "never",
-    ],
-    {
-      env,
-    },
-  );
+  const packaging = withRaisedFileLimit("pnpm", [
+    "exec",
+    "electron-builder",
+    "--projectDir",
+    stageAppDir,
+    "--config",
+    join(stageAppDir, "electron-builder.json"),
+    "--mac",
+    `--${arch}`,
+    "--publish",
+    "never",
+  ]);
+
+  run(packaging.command, packaging.commandArgs, {
+    env,
+  });
 }
 
 function verifyStageArtifacts(archOutputDir, signingInfo) {

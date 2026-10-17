@@ -355,6 +355,15 @@ server version is independent of this and is recorded in
    build up front with that explanation if something ever runs it on npm 10. If you build on
    your own Mac, `npm install -g npm@11` first.
 
+   Packaging also **needs more than macOS's default 256 open files.** electron-builder reads
+   the whole staged tree in parallel to write the `.dmg` and the updater `.zip`, and a bundle
+   carrying embedded Postgres plus the agent SDKs exhausts that limit — the failure is
+   `EMFILE: too many open files`, and it lands *after* signing succeeds, which makes it look
+   like a signing problem. `release-macos-local.mjs` spawns electron-builder through a shell
+   that raises the soft limit first (highest the hard limit allows, down to 2048), and prints
+   the limit it got. Nothing to do by hand, on CI or on your own Mac; the printed line is
+   where to look if `EMFILE` ever returns.
+
    The run does three things in order:
 
    - `build-mac` prints **signed** or **unsigned** to the run summary, builds both arches

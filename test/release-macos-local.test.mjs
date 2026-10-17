@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildStageConfig, resolveMacSigningIdentity } from "../scripts/release-macos-local.mjs";
+import { spawnSync } from "node:child_process";
+
+import { buildStageConfig, resolveMacSigningIdentity, withRaisedFileLimit } from "../scripts/release-macos-local.mjs";
 
 const NO_IDENTITIES = () => [];
 const ONE_IDENTITY = () => ["Developer ID Application: havenCo (ABCDE12345)"];
@@ -99,4 +101,49 @@ test("both paths still skip the app-server tree and target both dmg and zip", ()
     assert.equal(config.publish.owner, "whit3hat");
     assert.equal(config.publish.repo, "haven-office");
   }
+});
+
+test("the packaging child is left alone off macOS", () => {
+  const call = withRaisedFileLimit("pnpm", ["exec", "electron-builder"], { platform: "linux" });
+
+  assert.equal(call.command, "pnpm");
+  assert.deepEqual(call.commandArgs, ["exec", "electron-builder"]);
+});
+
+test("on macOS the packaging child is wrapped in a descriptor-limit raise", () => {
+  const call = withRaisedFileLimit("pnpm", ["exec", "electron-builder", "--mac"], { platform: "darwin" });
+
+  assert.equal(call.command, "/bin/sh");
+  assert.equal(call.commandArgs[0], "-c");
+  assert.match(call.commandArgs[1], /ulimit -n/);
+  assert.match(call.commandArgs[1], /exec "\$@"/);
+  // $0 placeholder, then the original argv in order.
+  assert.deepEqual(call.commandArgs.slice(2), ["sh", "pnpm", "exec", "electron-builder", "--mac"]);
+});
+
+test("the limit ladder descends, so a low hard limit still gets the best it allows", () => {
+  const { commandArgs } = withRaisedFileLimit("pnpm", [], { platform: "darwin" });
+  const ladder = commandArgs[1].match(/^for limit in (.+); do$/m)[1].split(" ").map(Number);
+
+  assert.ok(ladder.length > 1);
+  assert.deepEqual(ladder, [...ladder].sort((a, b) => b - a));
+  assert.ok(ladder.at(-1) > 256, "the lowest rung must still beat the macOS default of 256");
+});
+
+test("the wrapper runs the real command, with arguments that contain spaces intact", () => {
+  // Exercised here rather than asserted on: the `"$@"` handoff is the whole
+  // point, and a staged path like `/var/folders/.../Haven Office.app` is
+  // exactly the argument a quoting bug would split.
+  const { command, commandArgs } = withRaisedFileLimit(
+    process.execPath,
+    ["-e", "console.log(JSON.stringify(process.argv.slice(1)))", "Haven Office.app", "--mac"],
+    { platform: "darwin" },
+  );
+
+  const result = spawnSync(command, commandArgs, { encoding: "utf8" });
+
+  assert.equal(result.status, 0, result.stderr);
+  const lines = result.stdout.trim().split("\n");
+  assert.match(lines[0], /^\[release-local\] file descriptor soft limit: \d+$/);
+  assert.deepEqual(JSON.parse(lines[1]), ["Haven Office.app", "--mac"]);
 });
