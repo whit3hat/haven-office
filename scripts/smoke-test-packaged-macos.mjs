@@ -6,9 +6,17 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
+import { assertBundledPluginsInstalled } from "./packaged-smoke-assertions.mjs";
+import { bundledPluginVersions } from "./stage-plugins.mjs";
+
 const args = process.argv.slice(2);
 const appPath = takeOption("--app");
 const timeoutMs = Number.parseInt(takeOption("--timeout-ms") || "90000", 10);
+// Plugin provisioning starts only once the server is healthy and then installs
+// from a local path, so it gets its own budget rather than eating the startup
+// one. Separate numbers also keep the failure message honest about which half
+// ran out of time.
+const pluginTimeoutMs = Number.parseInt(takeOption("--plugin-timeout-ms") || "180000", 10);
 const keepData = hasFlag("--keep-data");
 
 if (!appPath) {
@@ -30,6 +38,7 @@ seedLocalAutoStart(userDataDir);
 const outputChunks = [];
 let child = null;
 let settled = false;
+let verified = false;
 
 try {
   const result = await runSmokeTest();
@@ -120,9 +129,10 @@ function runSmokeTest() {
       reject(error);
     });
     child.on("exit", (code, signal) => {
-      if (settled) return;
+      if (verified) return;
       clearTimeout(timeout);
-      reject(new Error(`Packaged app exited before server startup (code=${code}, signal=${signal}).\n${tailOutput()}`));
+      const phase = settled ? "while its endpoints were being verified" : "before server startup";
+      reject(new Error(`Packaged app exited ${phase} (code=${code}, signal=${signal}).\n${tailOutput()}`));
     });
   });
 }
@@ -147,15 +157,18 @@ function handleOutput(chunk, resolve, reject, timeout) {
   }
 
   settled = true;
+  // The startup race is over; endpoint verification carries its own deadlines,
+  // and plugin provisioning can legitimately outlast the startup budget.
+  clearTimeout(timeout);
   const port = Number.parseInt(match[1], 10);
   const url = `http://127.0.0.1:${port}`;
   void verifyServerEndpoints(url)
     .then(() => {
-      clearTimeout(timeout);
+      verified = true;
       resolve({ url });
     })
     .catch((error) => {
-      clearTimeout(timeout);
+      verified = true;
       reject(new Error(`Server started but smoke endpoint failed: ${error.message}\n${tailOutput()}`));
     });
 }
@@ -164,6 +177,16 @@ async function verifyServerEndpoints(url) {
   await requestOk(`${url}/get-session`);
   await requestNonEmptyJsonArray(`${url}/api/skills/catalog`);
   await requestNonEmptyJsonArray(`${url}/api/teams/catalog`);
+
+  // The office is the view the app opens on, and it 404s unless the bundled
+  // plugin was installed into this profile. Provisioning is deliberately
+  // non-fatal, so a server that answers every endpoint above can still have
+  // no office — nothing in CI noticed that until a human install did.
+  await assertBundledPluginsInstalled({
+    origin: url,
+    plugins: bundledPluginVersions,
+    timeoutMs: pluginTimeoutMs,
+  });
 }
 
 function findProductionPathLeak(output) {
