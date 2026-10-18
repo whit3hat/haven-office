@@ -138,6 +138,26 @@ Local data lives in:
 
 This is the mode most of the team wants.
 
+> **Prerequisite — that host name only exists on the lab network.** Measured
+> 2026-10-18: `paperclip.lab.havenco.xyz` is **NXDOMAIN on public DNS** (the authoritative
+> `havenco.xyz` zone is on Route 53 and has no record for it) and resolves, on the lab's own
+> resolvers `192.168.4.2` / `192.168.4.3`, to the **private address `192.168.4.8`**. So the
+> Mac you install on must (a) be on the lab LAN or VPN, and (b) be using the lab's DNS
+> servers. Neither is something the app can arrange. Confirm both in one command before you
+> click anything:
+>
+> ```sh
+> curl -sS -m 8 -o /dev/null -w '%{http_code}\n' https://paperclip.lab.havenco.xyz/api/health
+> ```
+>
+> `200` means you are good. `Could not resolve host` is DNS — compare `scutil --dns | grep
+> nameserver` against the two addresses above. A timeout means DNS is fine but you are not on
+> the network that can route to `192.168.4.8`.
+>
+> The certificate is a **real Let's Encrypt certificate** for that name (CN
+> `paperclip.lab.havenco.xyz`, issuer `Let's Encrypt YE2`, expires 2027-01-02), so there is no
+> lab CA to install and TLS should never be the problem here.
+
 1. Click the **Remote** tab, then **Connect to Remote**.
 2. In **Remote URL**, enter:
 
@@ -526,8 +546,10 @@ use, so a pass here means the real connection can reach the host too.
 
 | What it says | What it means | What to do |
 |---|---|---|
-| **TLS validation failed** — *"self-signed certificate (DEPTH_ZERO_SELF_SIGNED_CERT)"*, *"certificate has expired"*, *"unable to verify the first certificate"* | The host answered, but macOS does not trust its certificate. For a lab host this usually means a private CA. | Install the lab CA in **Keychain Access → System → Certificates** and mark it trusted, then verify again. The app uses the system trust store, so once Safari trusts the host, so does Haven Office. |
-| **Host unreachable** — *"connect ECONNREFUSED …"*, *"ERR_NAME_NOT_RESOLVED"*, *"ERR_CONNECTION_TIMED_OUT"* | Nothing answered on that address. | Check you are on the lab network or VPN, and that the URL resolves in a browser from the same Mac. |
+| **TLS validation failed** — *"self-signed certificate (DEPTH_ZERO_SELF_SIGNED_CERT)"*, *"certificate has expired"*, *"unable to verify the first certificate"* | The host answered, but macOS does not trust its certificate. | **Not expected against `paperclip.lab.havenco.xyz`** — that host serves a real Let's Encrypt certificate (measured 2026-10-18, see part 4b), so this message there means something is intercepting TLS. For a different lab host behind a private CA, install the CA in **Keychain Access → System → Certificates** and mark it trusted. The app uses the system trust store, so once Safari trusts the host, so does Haven Office. |
+| **Host unreachable** — *"getaddrinfo ENOTFOUND … (ENOTFOUND)"*, *"net::ERR_NAME_NOT_RESOLVED"* | **DNS.** The name never resolved on this Mac. This is the most likely cause for our own remote: the name exists only in the lab's internal DNS (part 4b). | Point the Mac at the lab resolvers `192.168.4.2` / `192.168.4.3`, or get on the VPN that hands them out. Check with `scutil --dns \| grep nameserver`. |
+| **Host unreachable** — *"connect ECONNREFUSED … (ECONNREFUSED)"* | The name resolved and the host answered, but nothing is listening on that port. | Check the port in the URL. `https://` with no port means 443. |
+| **Host unreachable** — *"net::ERR_CONNECTION_TIMED_OUT"*, *"ETIMEDOUT"*, *"EHOSTUNREACH"* | The name resolved but the address never answered — DNS is fine, routing is not. | `paperclip.lab.havenco.xyz` resolves to the **private** address `192.168.4.8`, so you must be on the lab LAN or VPN. A coffee-shop network will always time out here. |
 | **Host reachable, not Paperclip** — *"…/api/health redirected (HTTP 302) to …"* | A gateway or SSO proxy is intercepting the probe. The app deliberately does **not** follow redirects while verifying, because the URL is untrusted at that point. | Point the connection at the Paperclip origin itself rather than a vanity or gateway URL. |
 | **Host reachable, not Paperclip** — *"…answered with "text/html" rather than JSON"* | Something is listening, but it is not a Paperclip server — often a default web-server landing page. | Check the port and hostname. |
 | **Remote not eligible** | The server is configured for loopback-only local use. | It needs reconfiguring to authenticated mode; that is a server-side change, not a client one. |
@@ -536,6 +558,11 @@ use, so a pass here means the real connection can reach the host too.
 > If the message is just the bare word **"fetch failed"** with no reason after it, you are on
 > a build older than `v2026.10.7`. That build could not report *why* a connection failed.
 > Update before troubleshooting any further.
+>
+> If **"Host unreachable"** appears with no sentence distinguishing DNS from a refusal from a
+> timeout, you are on a build older than `v2026.10.8`. From `v2026.10.8` the detail names which
+> of the three it was and what to check. On `v2026.10.6` and earlier the badge was also shown
+> for **TLS** failures, so it did not even mean what it said.
 
 **The server log** is the first place to look for anything local-mode related:
 

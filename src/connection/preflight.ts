@@ -190,7 +190,7 @@ export async function preflightRemoteConnection(options: PreflightOptions): Prom
       origin: normalized.origin,
       insecureTransport: normalized.insecureTransport,
       reason: classifyFetchError(error),
-      detail: describeFetchError(error),
+      detail: describeFetchError(error, normalized.origin),
       warning: normalized.warning,
     });
   }
@@ -458,7 +458,71 @@ const TLS_ERROR_CODES = [
   "ERR_TLS_CERT_ALTNAME_INVALID",
 ];
 
-function describeFetchError(error: unknown): string {
+/**
+ * The three transport failures that all arrive as "Host unreachable", and the
+ * different repairs they call for.
+ *
+ * Node/OpenSSL codes come from undici; `ERR_*` codes come from Chromium, which
+ * is what Electron's session-backed fetch reports. Keeping both spellings
+ * matters because the two stacks name the same failure differently.
+ */
+const DNS_ERROR_CODES = [
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ERR_NAME_NOT_RESOLVED",
+  "ERR_NAME_RESOLUTION_FAILED",
+];
+
+const REFUSED_ERROR_CODES = ["ECONNREFUSED", "ERR_CONNECTION_REFUSED"];
+
+const UNROUTABLE_ERROR_CODES = [
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "ERR_CONNECTION_TIMED_OUT",
+  "ERR_ADDRESS_UNREACHABLE",
+  "ERR_INTERNET_DISCONNECTED",
+];
+
+/**
+ * Turn a transport error code into the one thing worth checking next.
+ *
+ * "Host unreachable" is true of a name that never resolved, a port with
+ * nothing behind it, and an address that cannot be routed to — but those are
+ * three unrelated repairs, and the code is the only thing that tells them
+ * apart. havenCo's own remote is the motivating case: `paperclip.lab.havenco.xyz`
+ * exists only in the lab's internal DNS and points at a private address, so a
+ * Mac using any other resolver gets `ENOTFOUND` and a Mac off the LAN gets a
+ * timeout. Neither is a fault in the app or the server.
+ */
+function describeTransportFailure(codes: string[], origin: string): string | null {
+  let host: string;
+  let port: string;
+  try {
+    const url = new URL(origin);
+    host = url.hostname;
+    port = url.port || (url.protocol === "http:" ? "80" : "443");
+  } catch {
+    return null;
+  }
+
+  if (codes.some((code) => DNS_ERROR_CODES.includes(code))) {
+    return `The name "${host}" did not resolve on this Mac. A lab-internal name resolves only through the lab's own DNS servers, so check System Settings → Network → DNS, or that you are on the lab network or VPN.`;
+  }
+
+  if (codes.some((code) => REFUSED_ERROR_CODES.includes(code))) {
+    return `${host} resolved and answered, but nothing is listening on port ${port}. Check the port in the URL.`;
+  }
+
+  if (codes.some((code) => UNROUTABLE_ERROR_CODES.includes(code))) {
+    return `${host} resolved but never answered. If it resolves to a private address (192.168.x.x, 10.x.x.x) you have to be on the lab network or VPN to reach it.`;
+  }
+
+  return null;
+}
+
+function describeFetchError(error: unknown, origin?: string): string {
   const { messages, codes } = unwrapErrorChain(error);
 
   // The outermost message is the generic wrapper; anything deeper is the real
@@ -469,7 +533,10 @@ function describeFetchError(error: unknown): string {
   }
 
   const code = codes.find((candidate) => !detail.includes(candidate));
-  return code ? `${detail} (${code})` : detail;
+  const described = code ? `${detail} (${code})` : detail;
+
+  const hint = origin ? describeTransportFailure(codes, origin) : null;
+  return hint ? `${described} — ${hint}` : described;
 }
 
 function classifyFetchError(error: unknown): RemotePreflightResult["reason"] {

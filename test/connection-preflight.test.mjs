@@ -437,6 +437,81 @@ test("preflight reports a connection failure as unreachable with the real reason
   assert.notEqual(result.detail, "fetch failed");
 });
 
+// "Host unreachable" is equally true of a name that never resolved, a port
+// with nothing behind it, and an address that cannot be routed to — and those
+// are three unrelated repairs. The owner reported exactly this badge on
+// 2026-10-18 with nothing to act on, which is what these assert against.
+// `paperclip.lab.havenco.xyz` is NXDOMAIN on public DNS and resolves to a
+// private address on the lab's own resolvers, so the DNS case is the likely one.
+test("preflight distinguishes DNS failure from refusal from an unroutable address", async () => {
+  const cases = [
+    {
+      code: "ENOTFOUND",
+      message: "getaddrinfo ENOTFOUND paperclip.lab.havenco.xyz",
+      expect: /did not resolve on this Mac/,
+      reject: /nothing is listening|never answered/,
+    },
+    // Chromium's spelling of the same failure, which the session-backed probe reports.
+    {
+      code: "ERR_NAME_NOT_RESOLVED",
+      message: "net::ERR_NAME_NOT_RESOLVED",
+      expect: /did not resolve on this Mac/,
+      reject: /nothing is listening|never answered/,
+    },
+    {
+      code: "ECONNREFUSED",
+      message: "connect ECONNREFUSED 192.168.4.8:443",
+      expect: /nothing is listening on port 443/,
+      reject: /did not resolve|never answered/,
+    },
+    {
+      code: "ERR_CONNECTION_TIMED_OUT",
+      message: "net::ERR_CONNECTION_TIMED_OUT",
+      expect: /private address \(192\.168\.x\.x, 10\.x\.x\.x\)/,
+      reject: /did not resolve|nothing is listening/,
+    },
+  ];
+
+  for (const { code, message, expect, reject } of cases) {
+    const result = await preflightRemoteConnection({
+      remoteUrl: "https://paperclip.lab.havenco.xyz",
+      fetchImpl: async () => {
+        throw undiciFetchFailure(message, code);
+      },
+    });
+
+    assert.equal(result.reason, "unreachable", `${code} should still classify as unreachable`);
+    // The raw diagnosis must survive alongside the hint, not be replaced by it.
+    assert.match(result.detail, new RegExp(code), `${code} should appear in the detail`);
+    assert.match(result.detail, expect, `${code} should name its own repair`);
+    assert.doesNotMatch(result.detail, reject, `${code} should not name another repair`);
+  }
+});
+
+test("the refusal hint names the port actually typed, not the scheme default", async () => {
+  const result = await preflightRemoteConnection({
+    remoteUrl: "https://paperclip.lab.havenco.xyz:8443",
+    fetchImpl: async () => {
+      throw undiciFetchFailure("connect ECONNREFUSED 192.168.4.8:8443", "ECONNREFUSED");
+    },
+  });
+
+  assert.match(result.detail, /nothing is listening on port 8443/);
+});
+
+test("an unrecognised transport code gets no invented hint", async () => {
+  const result = await preflightRemoteConnection({
+    remoteUrl: "https://paperclip.lab.havenco.xyz",
+    fetchImpl: async () => {
+      throw undiciFetchFailure("socket hang up", "ECONNRESET");
+    },
+  });
+
+  assert.equal(result.reason, "unreachable");
+  assert.match(result.detail, /socket hang up/);
+  assert.doesNotMatch(result.detail, /did not resolve|nothing is listening|never answered/);
+});
+
 test("preflight names a redirect instead of calling the host non-Paperclip", async () => {
   const result = await preflightRemoteConnection({
     remoteUrl: "https://paperclip.lab.havenco.xyz",
