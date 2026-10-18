@@ -315,6 +315,18 @@ it still sorts monotonically for `electron-updater`, which compares versions as 
 server version is independent of this and is recorded in
 [`development/release-runbook.md`](development/release-runbook.md).
 
+#### Not every tag is a release
+
+**`v2026.10.6` is the first and, as of 2026-10-18, only published release.** `v2026.10.0`
+through `v2026.10.5` are tags with **no release behind them**: each one is a `Release Desktop`
+run that failed in macOS packaging or verification, and the tag was pushed before the run
+proved itself. `GET /releases` returned `[]` for all six.
+
+So **do not install from a tag** — a tag may have no assets at all. Install from the
+[releases page](https://github.com/whit3hat/haven-office/releases), which only ever lists runs
+that packaged, verified and published. What each of those six failures was, and the fix it
+produced, is recorded in step 3 below.
+
 ### Steps
 
 1. **Bump the version and push it.**
