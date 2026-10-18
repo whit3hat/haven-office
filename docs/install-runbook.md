@@ -222,12 +222,33 @@ to watch the window open. If any of the four below is wrong, say so on the issue
 > 404s. It is a packaging defect, not a start-path one: the staged macOS build generates its
 > own electron-builder config, and that config had no `app-server/plugins` mapping, so the
 > plugin `prepare-server` staged was never copied into the `.app`. Preinstalling is
-> deliberately non-fatal, so the app opened and said nothing. Fixed in **`v2026.10.10`**,
-> where the build now fails rather than publishing an app without it
-> (`verify-macos-release.mjs`). Check rows 1–2 against `v2026.10.10` or newer; on an older
-> build use **View → Board**. Caught by the packaged smoke test on
+> deliberately non-fatal, so the app opened and said nothing. Caught by the packaged smoke
+> test on
 > [`Smoke Packaged macOS Release` #3](https://github.com/whit3hat/haven-office/actions/runs/39147656576):
 > *"Bundled plugins were not installed within 180000ms (installed plugins: none)"*.
+
+> **Also broken in `v2026.10.10` and `v2026.10.11`, for a second and unrelated reason: rows 1
+> and 2 will still fail.** Those builds *do* ship the plugin — `verify-macos-release` proves
+> it is in the packed `.app` — but installing it fails at first launch:
+>
+> ```
+> [plugins] paperclip-office could not be provisioned: HTTP 400:
+>   {"error":"ENOENT: no such file or directory, scandir
+>    '.../Contents/Resources/app-server/plugins/paperclip-office/migrations'"}
+> ```
+>
+> `paperclip-office@0.1.2` declares `database.migrationsDir: "migrations"` and ships that
+> directory holding nothing but `.gitkeep`. The server `readdir`s it while installing, so the
+> directory must exist; a directory whose only member is a dotfile does not reliably survive
+> staging and packaging, and nothing creates an empty directory for you. The install
+> transaction rolls back, the plugin never registers, and the office 404s — while every other
+> endpoint answers normally.
+>
+> Fixed in **`v2026.10.12`**: staging gives the directory a non-dotfile member, and
+> `assertStagedPluginPackage` now fails the build when a declared migrations directory is
+> absent from the packed `.app`. That assertion previously checked only entrypoints, which is
+> why `v2026.10.10` passed verification and shipped anyway. **Check rows 1–2 against
+> `v2026.10.12` or newer**; on anything older use **View → Board**.
 
 | # | What to do | What should happen |
 |---|---|---|
@@ -414,7 +435,8 @@ them**:
 - `v2026.10.8` and `v2026.10.9` — each superseded before it finished building, and cancelled
   rather than spending another ~40 minutes of macOS runner on a release that would have been
   replaced within the hour. `v2026.10.8`'s content shipped in `v2026.10.9`; `v2026.10.9`'s
-  shipped in `v2026.10.10`, which also carries the bundled-plugins fix. `v2026.10.9` was
+  shipped in `v2026.10.10`, which also carries the bundled-plugins *packaging* fix — though
+  not the install fix, which is `v2026.10.12`. `v2026.10.9` was
   cancelled specifically because it would have published a third release with no office.
 
 So **do not install from a tag** — a tag may have no assets at all, and the highest tag is
@@ -586,6 +608,52 @@ that packaged, verified and published.
    [`Smoke Packaged macOS Release` #3](https://github.com/whit3hat/haven-office/actions/runs/39147656576).
    The verifier check exists because the smoke test only runs *after* a release is published.
 
+   **Shipping the plugin is not the same as installing it — the third defect, and the one
+   that proved the guard above was too narrow.** `v2026.10.10` passed that verification and
+   still had no office. The smoke test failed on both arches with
+   `ENOENT ... scandir .../paperclip-office/migrations`.
+
+   `paperclip-office@0.1.2` declares `database.migrationsDir: "migrations"` and publishes that
+   directory containing only `.gitkeep`. The server resolves and `readdir`s it inside the
+   install transaction (`plugin-database.js` `listSqlMigrationFiles`), so the **directory has
+   to exist** even though it holds no migrations; the `readdir` raises, the transaction rolls
+   back, and the plugin never registers. Provisioning is non-fatal, so the app opens and only
+   the office 404s.
+
+   A directory whose only member is a dotfile is not a safe thing to carry through four copy
+   hops and a zip, and nothing in the chain creates an empty directory for you.
+   electron-builder lists `.gitkeep` in its own `excludedNames`, which is fair warning that
+   tooling filters exactly this name. Measured, hop by hop, on a Linux runner: `npm pack` +
+   `tar`, `stageBundledPlugins`'s `cpSync`, and electron-builder's `extraResources` filter
+   (`{dot: true}`, tested directly against `FileMatcher`) each preserve it, so the loss is not
+   in the hop anyone would guess — which is the reason the fix does not depend on knowing
+   which hop it is.
+
+   Two changes in `v2026.10.12`, both in `scripts/stage-plugins.mjs`:
+
+   - `stageBundledPlugins` creates the declared migrations directory and writes a
+     non-dotfile `KEEP-DIRECTORY.md` into it **only** when the plugin ships no `.sql` files,
+     so a future version with real migrations is copied untouched. The server reads only
+     `*.sql`, so the placeholder is inert.
+   - `assertStagedPluginPackage` fails when a declared migrations directory is missing. This
+     is the assertion `verify-macos-release` runs against the packed `.app`, and it is what
+     was too narrow: it checked `package.json` and the entrypoints and nothing else. A
+     declared migrations directory is as load-bearing as an entrypoint.
+
+   `migrationsDir` is pinned in `bundledPluginVersions` beside the version rather than read
+   from the plugin's manifest module, because nothing in this repo executes plugin code — in
+   the build or in the main process.
+
+   **The smoke test could not say any of this, and that was its own defect.** Its failure
+   report was the last 80 lines of app output; the `[plugins]` line naming the cause is
+   written at boot, and the 180-second plugin poll pushes ~85 request-log lines in after it.
+   `scripts/smoke-output-diagnostics.mjs` now lifts `[plugins]` and `[local-server]` lines
+   out of the whole buffer regardless of what followed, reports their total absence as a
+   finding in its own right (provisioning logs unconditionally once it runs, so no line at
+   all means it was never reached), and the workflow uploads the full output as an artifact
+   on success and failure alike. Recovering one error string previously cost a code change
+   and another dispatch.
+
    **The missing Local Network purpose string — the second defect that reached a user, and
    the one no CI job could have caught.** Up to and including `v2026.10.10`, neither
    electron-builder config set `mac.extendInfo`, so the packed `Info.plist` carried no
@@ -682,7 +750,7 @@ already installed it keeps it; publish a higher version to move them.
 | **"The application is damaged and can't be opened"** | Not the Gatekeeper warning — this one means the download is actually corrupt, or the app was modified after signing. Re-download the `.dmg`. |
 | **Wrong architecture** — app is very slow, or won't start | You installed the Intel `.dmg` on Apple Silicon or vice versa. Check About This Mac, delete the app, install the other one. |
 | **Local mode hangs on "Starting database"** | First launch initializes an embedded Postgres and is slow. If it is still stuck after ~5 minutes, check the server log (below). |
-| **The office page 404s** (local *or* remote) | **Always the case on `v2026.10.6` and `v2026.10.7`** — those builds ship no plugins at all (§ 4c). Install `v2026.10.10` or newer. On any build, check the app log for `[plugins]`: `No bundled plugins found in …` means the `.app` was packaged without them, `could not be provisioned` means the install itself failed, and no `[plugins]` line at all means a build older than that logging. The app deliberately opens anyway rather than refusing to launch; use **View → Board** meanwhile. See [`local-mode-plugin.md`](local-mode-plugin.md). |
+| **The office page 404s** (local *or* remote) | **Always the case on `v2026.10.6`–`v2026.10.11`**, for two different reasons (§ 4c): `v2026.10.6`/`v2026.10.7` ship no plugins at all, and `v2026.10.10`/`v2026.10.11` ship the plugin but fail to install it (`ENOENT … scandir …/migrations`). **Install `v2026.10.12` or newer.** On any build, check the app log for `[plugins]`: `No bundled plugins found in …` means the `.app` was packaged without them, `could not be provisioned: … ENOENT … migrations` is the install bug fixed in `v2026.10.12`, any other `could not be provisioned` is a new failure worth reporting with the line quoted, and no `[plugins]` line at all means a build older than that logging. The app deliberately opens anyway rather than refusing to launch; use **View → Board** meanwhile. See [`local-mode-plugin.md`](local-mode-plugin.md). |
 | **Remote verification fails** | The app tells you which check failed — see [the table below](#remote-verification-messages) for what each message means. A private authenticated deployment redacting fields is fine and still verifies; a wrong host or an offline server is not. Confirm the URL works in a browser first. |
 | **Signed in on the web but not in the app** | Sessions are not shared with your browser. Sign in inside the app window. |
 | **No updates ever offered** | Check that the newest release has a `latest-mac.yml` asset and is not a draft or prerelease. |

@@ -57,7 +57,13 @@ const manifestFiles = ["dist/manifest.js", "dist/worker.js", "dist/ui/index.js"]
 const pinned = [{ name: "demo-plugin", version: "1.2.3" }];
 
 test("the pinned list is what the provisioning contract documents", () => {
-  assert.deepEqual(bundledPluginVersions, [{ name: "paperclip-office", version: "0.1.2" }]);
+  // migrationsDir is pinned here rather than read from the plugin's manifest
+  // module on purpose: nothing in this repo imports plugin code, in the build
+  // or in the main process. v2026.10.10 shipped without this directory and
+  // failed to install the office at runtime.
+  assert.deepEqual(bundledPluginVersions, [
+    { name: "paperclip-office", version: "0.1.2", migrationsDir: "migrations" },
+  ]);
 });
 
 test("staging copies the package under <bundle>/plugins/<name>", () => {
@@ -132,10 +138,19 @@ test(
 
     assert.equal(staged.length, bundledPluginVersions.length);
     for (const plugin of staged) {
-      assert.deepEqual(
-        { name: plugin.name, version: plugin.version },
-        bundledPluginVersions.find((pinned) => pinned.name === plugin.name),
-      );
+      const pin = bundledPluginVersions.find((entry) => entry.name === plugin.name);
+      assert.deepEqual({ name: plugin.name, version: plugin.version }, {
+        name: pin.name,
+        version: pin.version,
+      });
+      // The directory the server readdirs during install has to be in the
+      // staged copy, whatever the published tarball chose to keep it with.
+      if (pin.migrationsDir) {
+        assert.ok(
+          fs.statSync(path.join(plugin.path, pin.migrationsDir)).isDirectory(),
+          `${plugin.name} staged without its ${pin.migrationsDir} directory`,
+        );
+      }
       assert.ok(plugin.entrypoints.length > 0, `${plugin.name} staged with no entrypoints`);
       // No node_modules: `npm pack` ships the files whitelist, nothing resolved.
       assert.equal(fs.existsSync(path.join(plugin.path, "node_modules")), false);
@@ -227,4 +242,82 @@ test("an empty pinned list has nothing to ship and nothing to assert", () => {
     }),
     [],
   );
+});
+
+/**
+ * The v2026.10.10 regression, in the shape it actually shipped.
+ *
+ * That release passed verify-macos-release and then failed its own smoke test
+ * with `ENOENT: no such file or directory, scandir .../paperclip-office/
+ * migrations`. The verifier only checked entrypoints, so a packed .app missing
+ * the directory the server readdirs during install was publishable.
+ */
+const pinnedWithMigrations = [
+  { name: "demo-plugin", version: "1.2.3", migrationsDir: "migrations" },
+];
+
+test("a packed app missing the declared migrations directory is rejected", () => {
+  const root = fakePluginsRoot({ "demo-plugin": { pkg: manifest, files: manifestFiles } });
+
+  assert.throws(
+    () => assertBundledPluginsPresent({ pluginsRoot: root, plugins: pinnedWithMigrations }),
+    /declares a migrations directory "migrations" that is missing/,
+  );
+});
+
+test("a migrations path that is a file, not a directory, is rejected", () => {
+  const root = fakePluginsRoot({
+    "demo-plugin": { pkg: manifest, files: [...manifestFiles, "migrations"] },
+  });
+
+  assert.throws(
+    () => assertBundledPluginsPresent({ pluginsRoot: root, plugins: pinnedWithMigrations }),
+    /declares a migrations directory "migrations" that is missing/,
+  );
+});
+
+test("staging gives an otherwise-empty migrations directory a member that survives packaging", () => {
+  // Upstream keeps it with `.gitkeep` alone, which is what did not survive.
+  const sourceDir = fakeSource("demo-plugin", manifest, [...manifestFiles, "migrations/.gitkeep"]);
+  const bundleDir = tempDir("haven-bundle-migrations-");
+
+  stageBundledPlugins({ bundleDir, sourceDir, plugins: pinnedWithMigrations, log: () => {} });
+
+  const migrationsDir = path.join(bundleDir, "plugins", "demo-plugin", "migrations");
+  const kept = fs.readdirSync(migrationsDir).filter((entry) => !entry.startsWith("."));
+  assert.ok(kept.length > 0, "the directory must hold a non-dotfile member");
+  assert.ok(
+    kept.every((entry) => !entry.endsWith(".sql")),
+    "the placeholder must not look like a migration the server would run",
+  );
+});
+
+test("staging never overwrites real migrations with a placeholder", () => {
+  const sourceDir = fakeSource("demo-plugin", manifest, [
+    ...manifestFiles,
+    "migrations/0001_init.sql",
+  ]);
+  const bundleDir = tempDir("haven-bundle-real-migrations-");
+
+  stageBundledPlugins({ bundleDir, sourceDir, plugins: pinnedWithMigrations, log: () => {} });
+
+  assert.deepEqual(
+    fs.readdirSync(path.join(bundleDir, "plugins", "demo-plugin", "migrations")).sort(),
+    ["0001_init.sql"],
+  );
+});
+
+test("staging creates the migrations directory even when the source omits it entirely", () => {
+  const sourceDir = fakeSource("demo-plugin", manifest, manifestFiles);
+  const bundleDir = tempDir("haven-bundle-no-migrations-");
+
+  const staged = stageBundledPlugins({
+    bundleDir,
+    sourceDir,
+    plugins: pinnedWithMigrations,
+    log: () => {},
+  });
+
+  assert.equal(staged.length, 1);
+  assert.ok(fs.statSync(path.join(bundleDir, "plugins", "demo-plugin", "migrations")).isDirectory());
 });

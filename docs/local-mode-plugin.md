@@ -48,9 +48,28 @@ build/server-bundle/<os>-<arch>/plugins/paperclip-office/
   dist/manifest.js
   dist/worker.js
   dist/ui/index.js
-  migrations/
+  migrations/KEEP-DIRECTORY.md
   README.md LICENSE NOTICE
 ```
+
+**`migrations/` must exist, and that is load-bearing.** The manifest declares
+`database.migrationsDir: "migrations"`, and the server `readdir`s that directory inside the
+install transaction (`plugin-database.js` `listSqlMigrationFiles`). If it is absent the
+`readdir` raises `ENOENT`, the transaction rolls back, the plugin never registers, and the
+office route 404s while every other endpoint answers normally — exactly what shipped in
+`v2026.10.10`.
+
+`paperclip-office@0.1.2` publishes the directory holding only `.gitkeep`, which is not a safe
+thing to carry through four copy hops and a zip; electron-builder lists `.gitkeep` in its own
+`excludedNames`, and nothing in the chain creates an empty directory for you. So
+`stageBundledPlugins` writes a non-dotfile `KEEP-DIRECTORY.md` instead — **only** when the
+plugin ships no `.sql` files, so a future version with real migrations is copied untouched.
+Only `*.sql` is ever read, so the placeholder is inert. `assertStagedPluginPackage` fails the
+build when the declared directory is missing from the packed `.app`, which is the check
+`verify-macos-release` runs; it previously looked at entrypoints only.
+
+`migrationsDir` is pinned in `bundledPluginVersions` beside the version, not read from the
+plugin's manifest module: nothing here executes plugin code, in the build or at runtime.
 
 `electron-builder.yml` maps that to `<Resources>/app-server/plugins`, which the existing
 macOS `signIgnore` rule (`/Contents/Resources/app-server/.*`) already covers.
