@@ -178,6 +178,13 @@ export async function provisionBundledPlugins(
 
   const staged = readStagedPlugins(options.pluginsRoot);
   if (staged.length === 0) {
+    // Say so. An app packaged without its plugins directory reached exactly
+    // this branch and returned silently, so a build with no office looked
+    // identical in the log to a build that had nothing to do — the office
+    // simply 404d with no explanation anywhere. The build now fails on a
+    // missing directory (verify-macos-release.mjs), and if one ever gets
+    // through, this line is what names it.
+    log(`[plugins] No bundled plugins found in ${options.pluginsRoot}; installing none.`);
     return [];
   }
 

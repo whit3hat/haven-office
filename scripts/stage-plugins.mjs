@@ -64,11 +64,84 @@ export function fetchBundledPluginPackages({
 }
 
 /**
+ * Assert that `pluginDir` holds the plugin layout the server's local-path
+ * installer requires: a package.json at the pinned name and version whose
+ * `paperclipPlugin` entrypoints all exist on disk. The server never builds a
+ * plugin from inside a packaged app, so a missing entrypoint has to fail a
+ * build, not a first launch.
+ *
+ * Shared by the staging step and by verify-macos-release.mjs, which runs the
+ * same assertion against `Contents/Resources/app-server/plugins` in the packed
+ * .app. Staging the directory correctly and *shipping* it are two different
+ * things, and v2026.10.6 and v2026.10.7 shipped without it.
+ *
+ * Throws on any violation; the caller turns that into a non-zero exit.
+ */
+export function assertStagedPluginPackage({ pluginDir, name, version }) {
+  const manifestPath = path.join(pluginDir, "package.json");
+  if (!existsSync(manifestPath)) {
+    throw new Error(`plugin ${name} is missing its package.json at ${manifestPath}`);
+  }
+
+  const pkg = JSON.parse(readFileSync(manifestPath, "utf8"));
+  if (pkg.name !== name) {
+    throw new Error(`plugin directory ${pluginDir} declares name ${pkg.name}, expected ${name}`);
+  }
+
+  if (pkg.version !== version) {
+    throw new Error(
+      `plugin ${name} staged version ${pkg.version} does not match the pinned ${version}`,
+    );
+  }
+
+  const entrypoints = pkg.paperclipPlugin;
+  if (!entrypoints || typeof entrypoints !== "object") {
+    throw new Error(`${name} declares no "paperclipPlugin" entrypoints`);
+  }
+
+  const declaredKeys = Object.keys(entrypoints).sort();
+  if (declaredKeys.length === 0) {
+    throw new Error(`${name} declares no "paperclipPlugin" entrypoints`);
+  }
+
+  for (const key of declaredKeys) {
+    const declared = entrypoints[key];
+    if (!existsSync(path.join(pluginDir, declared))) {
+      throw new Error(
+        `${name} entrypoint "${key}" (${declared}) is missing from ${pluginDir}`,
+      );
+    }
+  }
+
+  return { name, version, path: pluginDir, entrypoints: declaredKeys };
+}
+
+/**
+ * Assert that every pinned plugin is present under `pluginsRoot` with a valid
+ * layout. Used against the packed .app, where an absent directory means the
+ * packaging step dropped the plugins — which provisioning then treats as
+ * "nothing to install" and the office route 404s.
+ */
+export function assertBundledPluginsPresent({ pluginsRoot, plugins = bundledPluginVersions }) {
+  if (plugins.length === 0) {
+    return [];
+  }
+
+  if (!existsSync(pluginsRoot)) {
+    throw new Error(
+      `Bundled plugins are missing: ${pluginsRoot} does not exist, so `
+      + `${plugins.map(({ name }) => name).join(", ")} would not be installed and the office route 404s.`,
+    );
+  }
+
+  return plugins.map(({ name, version }) =>
+    assertStagedPluginPackage({ pluginDir: path.join(pluginsRoot, name), name, version }),
+  );
+}
+
+/**
  * Copy the fetched plugins into `<bundleDir>/plugins` and assert the layout the
- * server's local-path installer requires: a package.json at the pinned version
- * whose `paperclipPlugin` entrypoints all exist on disk. The server never
- * builds a plugin from inside a packaged app, so a missing entrypoint has to
- * fail the build, not the first launch.
+ * server's local-path installer requires.
  *
  * Throws on any violation; the caller turns that into a non-zero exit.
  */
@@ -91,36 +164,12 @@ export function stageBundledPlugins({
     const target = path.join(pluginsDir, name);
     cpSync(source, target, { recursive: true, dereference: true, force: true });
 
-    const pkg = JSON.parse(readFileSync(path.join(target, "package.json"), "utf8"));
-    if (pkg.version !== version) {
-      throw new Error(
-        `plugin ${name} staged version ${pkg.version} does not match the pinned ${version}`,
-      );
-    }
-
-    const entrypoints = pkg.paperclipPlugin;
-    if (!entrypoints || typeof entrypoints !== "object") {
-      throw new Error(`${name} declares no "paperclipPlugin" entrypoints`);
-    }
-
-    const declaredKeys = Object.keys(entrypoints).sort();
-    if (declaredKeys.length === 0) {
-      throw new Error(`${name} declares no "paperclipPlugin" entrypoints`);
-    }
-
-    for (const key of declaredKeys) {
-      const declared = entrypoints[key];
-      if (!existsSync(path.join(target, declared))) {
-        throw new Error(
-          `${name} entrypoint "${key}" (${declared}) is missing from the published package`,
-        );
-      }
-    }
+    const checked = assertStagedPluginPackage({ pluginDir: target, name, version });
 
     log(
-      `[prepare-server] Staged plugin ${name}@${version} with entrypoints ${declaredKeys.join(", ")}.`,
+      `[prepare-server] Staged plugin ${name}@${version} with entrypoints ${checked.entrypoints.join(", ")}.`,
     );
-    staged.push({ name, version, path: target, entrypoints: declaredKeys });
+    staged.push(checked);
   }
 
   return staged;

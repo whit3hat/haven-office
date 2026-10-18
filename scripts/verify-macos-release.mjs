@@ -4,6 +4,7 @@ import { basename, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 import { MACH_O_MAGICS, isSignableMachOCode, machOFiletypes } from "./macho.mjs";
+import { assertBundledPluginsPresent } from "./stage-plugins.mjs";
 
 const outputDir = resolve(process.argv[2] || "release/local-macos");
 const requireStapled = process.argv.includes("--require-stapled");
@@ -271,6 +272,24 @@ function collectChecks(appPath) {
   const serverRuntime = verifyServerRuntimeDependencies(appPath);
   if (serverRuntime) {
     checks.serverRuntime = [serverRuntime];
+  }
+
+  // The office is the view the app opens on, and it only exists once its
+  // plugin is installed. Provisioning is non-fatal by design and silently
+  // installs nothing when the directory is absent, so an app packaged without
+  // it looks healthy on every other check — which is how v2026.10.6 and
+  // v2026.10.7 shipped with no office. Verified here, before publishing,
+  // rather than only by the post-publish smoke test.
+  const bundledPlugins = assertBundledPluginsPresent({
+    pluginsRoot: join(appPath, "Contents", "Resources", "app-server", "plugins"),
+  });
+  if (bundledPlugins.length > 0) {
+    checks.bundledPlugin = bundledPlugins.map((plugin) => ({
+      path: relative(plugin.path),
+      name: plugin.name,
+      version: plugin.version,
+      entrypoints: plugin.entrypoints,
+    }));
   }
 
   return checks;

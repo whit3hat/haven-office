@@ -14,6 +14,7 @@ import path from "node:path";
 import { after, test } from "node:test";
 
 import {
+  assertBundledPluginsPresent,
   bundledPluginVersions,
   fetchBundledPluginPackages,
   stageBundledPlugins,
@@ -141,3 +142,89 @@ test(
     }
   },
 );
+
+// ---------------------------------------------------------------------------
+// Shipping the staged directory is a separate thing from staging it, and
+// v2026.10.6 and v2026.10.7 shipped without it: the staged macOS build
+// generates its own electron-builder config and that config had no
+// app-server/plugins mapping. These cover the guard that now catches it.
+// ---------------------------------------------------------------------------
+
+/** Writes a plugin directory straight into a `plugins` root, as the packed .app has it. */
+function fakePluginsRoot(packages) {
+  const root = tempDir("haven-plugins-root-");
+  for (const [name, { pkg, files = [] }] of Object.entries(packages)) {
+    const dir = path.join(root, name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(pkg));
+    for (const file of files) {
+      const target = path.join(dir, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, "");
+    }
+  }
+  return root;
+}
+
+test("a packed app with no plugins directory at all fails, naming the 404", () => {
+  assert.throws(
+    () =>
+      assertBundledPluginsPresent({
+        pluginsRoot: path.join(os.tmpdir(), "haven-plugins-never-packed-xyz"),
+        plugins: pinned,
+      }),
+    /does not exist.*demo-plugin.*office route 404s/s,
+  );
+});
+
+test("a packed app missing one pinned plugin fails", () => {
+  const root = fakePluginsRoot({ "other-plugin": { pkg: manifest, files: manifestFiles } });
+
+  assert.throws(
+    () => assertBundledPluginsPresent({ pluginsRoot: root, plugins: pinned }),
+    /demo-plugin is missing its package.json/,
+  );
+});
+
+test("a packed app whose plugin lost an entrypoint fails", () => {
+  const root = fakePluginsRoot({
+    "demo-plugin": { pkg: manifest, files: ["dist/manifest.js", "dist/worker.js"] },
+  });
+
+  assert.throws(
+    () => assertBundledPluginsPresent({ pluginsRoot: root, plugins: pinned }),
+    /entrypoint "ui" \(\.\/dist\/ui\) is missing/,
+  );
+});
+
+test("a correctly packed app reports the plugin, its version and its entrypoints", () => {
+  const root = fakePluginsRoot({ "demo-plugin": { pkg: manifest, files: manifestFiles } });
+
+  assert.deepEqual(assertBundledPluginsPresent({ pluginsRoot: root, plugins: pinned }), [{
+    name: "demo-plugin",
+    version: "1.2.3",
+    path: path.join(root, "demo-plugin"),
+    entrypoints: ["manifest", "ui", "worker"],
+  }]);
+});
+
+test("a directory whose package.json names a different plugin is not accepted", () => {
+  const root = fakePluginsRoot({
+    "demo-plugin": { pkg: { ...manifest, name: "something-else" }, files: manifestFiles },
+  });
+
+  assert.throws(
+    () => assertBundledPluginsPresent({ pluginsRoot: root, plugins: pinned }),
+    /declares name something-else, expected demo-plugin/,
+  );
+});
+
+test("an empty pinned list has nothing to ship and nothing to assert", () => {
+  assert.deepEqual(
+    assertBundledPluginsPresent({
+      pluginsRoot: path.join(os.tmpdir(), "haven-plugins-absent-xyz"),
+      plugins: [],
+    }),
+    [],
+  );
+});

@@ -5,10 +5,14 @@ Recorded 2026-10-13 against `@paperclipai/server` **2026.1001.0** (the version p
 See [`UPSTREAM.md`](../UPSTREAM.md) for provenance and [`baseline.md`](baseline.md) for what
 this runner can and cannot verify.
 
-**Result: it works.** A fresh local-mode install preinstalls `paperclip-office` with no
-terminal step. The SDK version skew in the task framing turned out to be a non-issue, for a
-concrete reason recorded below. What is *not* yet verified is the packaged app actually
-running — that needs macOS and belongs to H5's smoke run.
+**Result: the mechanism works; shipping it did not, until `v2026.10.10`.** A fresh
+local-mode install preinstalls `paperclip-office` with no terminal step. The SDK version skew
+in the task framing turned out to be a non-issue, for a concrete reason recorded below.
+
+> **`v2026.10.6` and `v2026.10.7` shipped with no plugins directory in the `.app`**, so this
+> never ran in either of them and the office 404d. The packaging gap and its three fixes are
+> in *Not verified from this runner* below and in the runbook's § 7. Nothing in this document's
+> install mechanism was wrong — it was simply never handed anything to install.
 
 ## Where the plugin directory is
 
@@ -213,13 +217,16 @@ is a no-op even in an already-built bundle.
 
 ## Not verified from this runner
 
-- **The packaged app.** The staged directory itself *is* verified on Linux by
-  `test/stage-plugins.test.mjs`, which downloads and stages the real package. What is not is
-  the step after: `electron-builder` cannot produce a `.app` off macOS, so the
-  `<Resources>/app-server/plugins` mapping and the read-only-bundle install are unproven end
-  to end. This is H5's smoke run. The specific thing to check: launch a fresh profile, confirm
-  `[plugins] Installing paperclip-office@…` in the server log and that the window lands on
-  `/HAV/office` rather than a 404.
+- ~~**The packaged app.**~~ **Verified 2026-10-18, and it was broken.** The step this section
+  called out as unproven — the `<Resources>/app-server/plugins` mapping — was in fact missing,
+  and `v2026.10.6` and `v2026.10.7` shipped with no plugins directory at all. The mapping
+  exists in the root `electron-builder.yml`, but `dist:mac` goes through
+  `scripts/release-macos-local.mjs`, which generates its own config, and that config did not
+  have it. `readStagedPlugins` returned `[]`, provisioning no-opped **silently**, and the
+  office 404d in every installed copy. Fixed in `v2026.10.10`: the stage ships and asserts the
+  directory, `verify-macos-release.mjs` fails a build that would publish without it, and
+  provisioning now logs when it finds nothing. Full write-up in the runbook's § 7. The
+  read-only-bundle install itself is still unproven — it has never been reached.
 - **A real spawned local server.** Native deps for the bundled server are not built on Linux
   (`pnpm.onlyBuiltDependencies` lists only the darwin embedded-postgres packages), so no live
   install request was made against a real server. The HTTP contract is covered by

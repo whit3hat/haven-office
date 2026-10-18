@@ -18,6 +18,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { assertBundledPluginsPresent, bundledPluginVersions } from "./stage-plugins.mjs";
+
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const projectRoot = resolve(__dirname, "..");
 const rootPackageJson = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf8"));
@@ -386,6 +388,24 @@ export function buildStageConfig(arch, signingInfo) {
         to: "app-server/node-bin",
         filter: ["**/*"],
       },
+      // Plugins preinstalled into the local server on first launch. This entry
+      // was missing until v2026.10.9: the repo-level electron-builder.yml had
+      // it, but the staged macOS build generates its own config and this is
+      // the file that builds every .dmg we publish. Without it
+      // `<Resources>/app-server/plugins` does not exist, readStagedPlugins
+      // returns an empty list, provisioning no-ops, and the office 404s.
+      // Deliberately outside app-server/packages/plugins so the server treats
+      // them as ordinary local-path installs and never tries to build them
+      // inside the read-only bundle.
+      ...(bundledPluginVersions.length === 0
+        ? []
+        : [
+            {
+              from: "app-server/plugins",
+              to: "app-server/plugins",
+              filter: ["**/*"],
+            },
+          ]),
     ],
     publish: {
       provider: "github",
@@ -459,6 +479,7 @@ function stageRuntimeFiles(stageAppDir, arch, stageRoot) {
 
   const desktopDistDir = join(projectRoot, "dist");
   const bundleServerDir = join(projectRoot, "build", "server-bundle", `mac-${arch}`, "server");
+  const bundlePluginsDir = join(projectRoot, "build", "server-bundle", `mac-${arch}`, "plugins");
   const nodeRuntimeDir = join(projectRoot, "build", "node-bin", `mac-${arch}`);
 
   assertExists(desktopDistDir, "Desktop build output");
@@ -471,6 +492,20 @@ function stageRuntimeFiles(stageAppDir, arch, stageRoot) {
   relativizeCopiedSymlinks(stageServerDir, bundleServerDir, stageServerDir);
   pruneNodeBinShims(stageServerDir);
   removeBrokenSymlinks(stageServerDir);
+
+  // The bundled plugins. Fail here rather than ship an app whose office route
+  // 404s: `prepare-server` stages these, and provisioning treats an absent
+  // directory as "nothing to install" without an error.
+  if (bundledPluginVersions.length > 0) {
+    const stagePluginsDir = join(stageAppDir, "app-server", "plugins");
+    assertExists(bundlePluginsDir, `Bundled plugins for mac-${arch}`);
+    cpSync(bundlePluginsDir, stagePluginsDir, { recursive: true });
+    assertBundledPluginsPresent({ pluginsRoot: stagePluginsDir });
+    console.log(
+      `[release-local] Staged ${bundledPluginVersions.length} bundled plugin(s) for preinstall: `
+      + bundledPluginVersions.map(({ name, version }) => `${name}@${version}`).join(", "),
+    );
+  }
 
   ensureDir(buildResourcesDir);
   cpSync(join(projectRoot, "build", "icon.png"), join(buildResourcesDir, "icon.png"));

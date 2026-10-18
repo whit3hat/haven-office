@@ -119,6 +119,29 @@ test("a missing plugins directory yields no work", () => {
   assert.deepEqual(readStagedPlugins(path.join(os.tmpdir(), "haven-plugins-absent-xyz")), []);
 });
 
+test("nothing staged is said out loud, not passed over in silence", async () => {
+  // This exact branch is what a build packaged without its plugins directory
+  // hit, and it used to return with no log line at all — so an app with no
+  // office was indistinguishable in the log from an app with nothing to
+  // install, and the only symptom was a 404 on the view it opens on.
+  const absent = path.join(os.tmpdir(), "haven-plugins-absent-xyz");
+  const logs = [];
+  const outcomes = await provisionBundledPlugins({
+    origin: "http://127.0.0.1:3100",
+    pluginsRoot: absent,
+    fetchImpl: () => {
+      throw new Error("no request should be made when nothing is staged");
+    },
+    env: {},
+    log: (message) => logs.push(message),
+  });
+
+  assert.deepEqual(outcomes, []);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /No bundled plugins found/);
+  assert.ok(logs[0].includes(absent), `the log should name the path it looked in: ${logs[0]}`);
+});
+
 test("provisioning installs a staged plugin over the local server's own API", async () => {
   const root = stagePluginsRoot({ "paperclip-office": officePackage });
   const calls = [];

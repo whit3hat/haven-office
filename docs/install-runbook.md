@@ -197,8 +197,19 @@ Once signed in, the window lands on `/HAV/office`. The **View** menu switches be
 
 The office-first start path has unit tests but has never been seen running: no agent on this
 project has a Mac or a display, so the first person to install the `.dmg` is the first person
-to watch the window open. If any of the four below is wrong, say so on the issue — it is a
-regression in the start-path work, not an install problem, and it gets fixed in code.
+to watch the window open. If any of the four below is wrong, say so on the issue.
+
+> **Known broken in `v2026.10.6` and `v2026.10.7`: rows 1 and 2 will fail.** Those builds
+> shipped with **no bundled plugins at all**, so there is no office to land on and the view
+> 404s. It is a packaging defect, not a start-path one: the staged macOS build generates its
+> own electron-builder config, and that config had no `app-server/plugins` mapping, so the
+> plugin `prepare-server` staged was never copied into the `.app`. Preinstalling is
+> deliberately non-fatal, so the app opened and said nothing. Fixed in **`v2026.10.10`**,
+> where the build now fails rather than publishing an app without it
+> (`verify-macos-release.mjs`). Check rows 1–2 against `v2026.10.10` or newer; on an older
+> build use **View → Board**. Caught by the packaged smoke test on
+> [`Smoke Packaged macOS Release` #3](https://github.com/whit3hat/haven-office/actions/runs/39147656576):
+> *"Bundled plugins were not installed within 180000ms (installed plugins: none)"*.
 
 | # | What to do | What should happen |
 |---|---|---|
@@ -375,15 +386,18 @@ server version is independent of this and is recorded in
 
 #### Not every tag is a release
 
-As of 2026-10-18, **`v2026.10.6` and `v2026.10.7` are the only published releases.** Seven
-other tags have **no release behind them**:
+As of 2026-10-18, **`v2026.10.6` and `v2026.10.7` are the only published releases** — and
+both of them ship without the office (see § 4c). Eight other tags have **no release behind
+them**:
 
 - `v2026.10.0` through `v2026.10.5` — each one a `Release Desktop` run that failed in macOS
   packaging or verification, tagged before the run proved itself. What each failure was, and
   the fix it produced, is in step 3 below.
-- `v2026.10.8` — superseded before it built. Its content shipped in `v2026.10.9`, and its
-  build was cancelled rather than spending another 45 minutes of macOS runner on a release
-  that would have been replaced within the hour.
+- `v2026.10.8` and `v2026.10.9` — each superseded before it finished building, and cancelled
+  rather than spending another ~40 minutes of macOS runner on a release that would have been
+  replaced within the hour. `v2026.10.8`'s content shipped in `v2026.10.9`; `v2026.10.9`'s
+  shipped in `v2026.10.10`, which also carries the bundled-plugins fix. `v2026.10.9` was
+  cancelled specifically because it would have published a third release with no office.
 
 So **do not install from a tag** — a tag may have no assets at all, and the highest tag is
 usually not the newest *release*. Install from the
@@ -519,6 +533,41 @@ that packaged, verified and published.
    under `unsignableMachOObject` rather than failing, which means something shipped an
    object file the prune did not recognise — worth a look, not a release blocker.
 
+   **The bundled plugins, and the only defect here that reached a user.** Every failure above
+   stopped a build. This one *published*: `v2026.10.6` and `v2026.10.7` both packaged,
+   verified, smoke-tested and installed, and both shipped with **no
+   `Contents/Resources/app-server/plugins` directory at all** — so no office (§ 4c).
+
+   The cause is that there are **two** electron-builder configs in this repo and only one of
+   them builds a published `.dmg`. `electron-builder.yml` at the root has had the
+   `build/server-bundle/${os}-${arch}/plugins` → `app-server/plugins` mapping since the
+   plugin work landed, and it is what `dist:win` and `dist:linux` use. But `dist:mac` runs
+   `scripts/release-macos-local.mjs`, which assembles a staging directory and **generates its
+   own config** (`buildStageConfig`) — and that config's `extraResources` listed only
+   `app-server/server` and `app-server/node-bin`. Nothing copied the plugins into the stage
+   either.
+
+   Nothing failed, because nothing was looking: `readStagedPlugins` treats an absent
+   directory as an empty list, and preinstalling is non-fatal by design, so the app opened
+   normally and the office simply 404d. There was not even a log line.
+
+   Three changes, so this cannot recur quietly:
+
+   - `buildStageConfig` ships `app-server/plugins`, and `stageRuntimeFiles` copies it into the
+     stage and asserts its layout there. `test/release-macos-local.test.mjs` asserts the
+     mapping is in the generated config on **both** signing paths.
+   - `verify-macos-release.mjs` now requires every pinned plugin inside the packed `.app` —
+     present, at the pinned version, with every declared `paperclipPlugin` entrypoint on disk.
+     A build that would ship without the office **fails before publishing**, under
+     `bundledPlugin` in its JSON report.
+   - provisioning logs `[plugins] No bundled plugins found in …; installing none.` instead of
+     returning silently.
+
+   The post-publish net is `smoke-packaged-macos.yml`, which polls `/api/plugins` on the
+   launched app; that is what actually caught this, on
+   [`Smoke Packaged macOS Release` #3](https://github.com/whit3hat/haven-office/actions/runs/39147656576).
+   The verifier check exists because the smoke test only runs *after* a release is published.
+
    The run does three things in order:
 
    - `build-mac` prints **signed** or **unsigned** to the run summary, builds both arches
@@ -573,7 +622,7 @@ already installed it keeps it; publish a higher version to move them.
 | **"The application is damaged and can't be opened"** | Not the Gatekeeper warning — this one means the download is actually corrupt, or the app was modified after signing. Re-download the `.dmg`. |
 | **Wrong architecture** — app is very slow, or won't start | You installed the Intel `.dmg` on Apple Silicon or vice versa. Check About This Mac, delete the app, install the other one. |
 | **Local mode hangs on "Starting database"** | First launch initializes an embedded Postgres and is slow. If it is still stuck after ~5 minutes, check the server log (below). |
-| **Local mode opens but the office page 404s** | The bundled office plugin failed to install. The app deliberately opens anyway rather than refusing to launch. Check the server log for `[plugins]`, and see [`local-mode-plugin.md`](local-mode-plugin.md). Use the **View → Board** menu item to get a working view meanwhile. |
+| **The office page 404s** (local *or* remote) | **Always the case on `v2026.10.6` and `v2026.10.7`** — those builds ship no plugins at all (§ 4c). Install `v2026.10.10` or newer. On any build, check the app log for `[plugins]`: `No bundled plugins found in …` means the `.app` was packaged without them, `could not be provisioned` means the install itself failed, and no `[plugins]` line at all means a build older than that logging. The app deliberately opens anyway rather than refusing to launch; use **View → Board** meanwhile. See [`local-mode-plugin.md`](local-mode-plugin.md). |
 | **Remote verification fails** | The app tells you which check failed — see [the table below](#remote-verification-messages) for what each message means. A private authenticated deployment redacting fields is fine and still verifies; a wrong host or an offline server is not. Confirm the URL works in a browser first. |
 | **Signed in on the web but not in the app** | Sessions are not shared with your browser. Sign in inside the app window. |
 | **No updates ever offered** | Check that the newest release has a `latest-mac.yml` asset and is not a draft or prerelease. |

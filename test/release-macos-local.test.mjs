@@ -103,6 +103,30 @@ test("both paths still skip the app-server tree and target both dmg and zip", ()
   }
 });
 
+test("the staged config ships the bundled plugins, on both signing paths", () => {
+  // The repo-level electron-builder.yml has had this mapping all along, but it
+  // is not the file that builds a published .dmg — this generated one is, and
+  // it lacked the entry through v2026.10.7. Those builds therefore packed no
+  // `<Resources>/app-server/plugins`, plugin provisioning found nothing to do,
+  // and the office route 404d in every installed copy.
+  for (const signing of [
+    { name: "Developer ID Application: havenCo (ABCDE12345)", teamId: "ABCDE12345", adhoc: false },
+    { name: null, teamId: null, adhoc: true },
+  ]) {
+    const config = buildStageConfig("arm64", signing);
+    const destinations = config.extraResources.map((entry) => entry.to);
+
+    assert.ok(
+      destinations.includes("app-server/plugins"),
+      `no app-server/plugins in ${JSON.stringify(destinations)}`,
+    );
+    assert.deepEqual(
+      config.extraResources.find((entry) => entry.to === "app-server/plugins"),
+      { from: "app-server/plugins", to: "app-server/plugins", filter: ["**/*"] },
+    );
+  }
+});
+
 test("the packaging child is left alone off macOS", () => {
   const call = withRaisedFileLimit("pnpm", ["exec", "electron-builder"], { platform: "linux" });
 
