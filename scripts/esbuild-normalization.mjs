@@ -40,21 +40,97 @@ function collectEsbuildBinaryTargets(rootDir, targets = []) {
   return targets;
 }
 
-// esbuild's postinstall runs on the *build host*, not the target. When we
-// cross-install (`npm install --cpu=x64` on an arm64 runner) it leaves two
-// host-arch artifacts behind: it overwrites `<pkg>/bin/esbuild`, which
-// normalizeDarwinEsbuildBinaries rewrites below, and it downloads a second copy
-// to `<pkg>/lib/downloaded-@esbuild-<host-platform>-esbuild`, which nothing used
-// to clean up. The latter is unreachable on the target — generateBinPath() keys
-// the lookup off the *running* platform, so an Intel Mac only ever resolves
-// `@esbuild/darwin-x64/bin/esbuild` (present) or a `downloaded-…-darwin-x64-…`
-// name that never matches the stray arm64 file. It is dead weight, but it is
-// still a Mach-O binary of the wrong arch inside the app, so
-// verify-macos-release's architecture check rejects the bundle.
+function collectEsbuildScopeDirs(rootDir, scopes = []) {
+  if (!existsSync(rootDir)) return scopes;
+
+  for (const entry of readdirSync(rootDir)) {
+    const full = path.join(rootDir, entry);
+
+    let stat;
+    try {
+      stat = lstatSync(full);
+    } catch {
+      continue;
+    }
+
+    if (stat.isSymbolicLink() || !stat.isDirectory()) continue;
+
+    if (entry === "@esbuild" && path.basename(path.dirname(full)) === "node_modules") {
+      scopes.push(full);
+      continue;
+    }
+
+    collectEsbuildScopeDirs(full, scopes);
+  }
+
+  return scopes;
+}
+
+// esbuild resolves its native binary at runtime through
+// `require.resolve("@esbuild/darwin-<arch>/bin/esbuild")` from inside
+// `esbuild/lib/main.js` (generateBinPath, main.js:1974). Node's lookup walks
+// `<esbuild>/node_modules`, then the `node_modules` directory holding the
+// esbuild copy, so a platform package placed beside the copy is exactly what the
+// runtime finds. Materialize it from the packed tarball rather than hoping the
+// install produced it: a cross-install does not.
 //
-// Prune it rather than rewriting it: the filename encodes the platform it is
-// for, so copying an x64 binary into a file named `…darwin-arm64…` would just be
+// Measured, 2026-10-18, `npm install --production --os=darwin --cpu=x64
+// --arch=x64` of @paperclipai/server@2026.1001.0 on a linux-x64 host with npm
+// 11.19.0: the only platform package installed is the *host's*
+// (`@esbuild/linux-x64`), not the target's. `--os`/`--cpu` do not reach these
+// optional platform dependencies. On GitHub's arm64 `macos-latest` runner the
+// same install is what left Release Desktop #5 with no
+// `@esbuild/darwin-x64` to find.
+function materializePlatformPackage(packageDir, arch, sourcePackageDir) {
+  const nodeModulesDir = path.dirname(packageDir);
+  const targetDir = path.join(nodeModulesDir, "@esbuild", `darwin-${arch}`);
+
+  mkdirSync(path.dirname(targetDir), { recursive: true });
+  rmSync(targetDir, { recursive: true, force: true });
+  cpSync(sourcePackageDir, targetDir, { recursive: true });
+
+  const platformBinary = path.join(targetDir, "bin", "esbuild");
+  if (!existsSync(platformBinary)) {
+    throw new Error(
+      `Materialized @esbuild/darwin-${arch} at ${targetDir} but it has no bin/esbuild. ` +
+      "The packaged app would have no esbuild binary to load.",
+    );
+  }
+
+  return targetDir;
+}
+
+// Two kinds of host-arch leftover ride along in a cross-installed bundle, and
+// both are Mach-O binaries of the wrong architecture inside the app, which
+// verify-macos-release rejects (correctly — see Release Desktop #4):
+//
+//   1. `@esbuild/<host-platform>`, the platform package npm installed for the
+//      build host instead of the target.
+//   2. `<esbuild>/lib/downloaded-@esbuild-<host-platform>-esbuild`, downloaded
+//      by esbuild's postinstall when it could not resolve (1) for the host.
+//
+// Neither is reachable on the target: generateBinPath keys both names off the
+// *running* platform, so a darwin-x64 app only ever looks for
+// `@esbuild/darwin-x64` or `downloaded-@esbuild-darwin-x64-esbuild`. Prune them
+// rather than rewriting them in place — the names encode the platform they are
+// for, so writing an x64 binary into a file named `…darwin-arm64…` would just be
 // a differently-shaped lie.
+function pruneForeignPlatformPackages(bundleServerDir, arch) {
+  const keep = `darwin-${arch}`;
+  const pruned = [];
+
+  for (const scopeDir of collectEsbuildScopeDirs(bundleServerDir)) {
+    for (const entry of readdirSync(scopeDir)) {
+      if (entry === keep) continue;
+      const full = path.join(scopeDir, entry);
+      rmSync(full, { recursive: true, force: true });
+      pruned.push(full);
+    }
+  }
+
+  return pruned;
+}
+
 function pruneForeignDownloadedEsbuildBinaries(packageDir, arch) {
   const libDir = path.join(packageDir, "lib");
   if (!existsSync(libDir)) return [];
@@ -72,55 +148,55 @@ function pruneForeignDownloadedEsbuildBinaries(packageDir, arch) {
   return pruned;
 }
 
-// Only safe to prune once we know the target-arch package the runtime actually
-// resolves is really there. Each nested `esbuild` copy has its sibling
-// `@esbuild/<platform>` in the same `node_modules` directory, so this is a
-// direct check rather than a re-implementation of node resolution. Failing here
-// turns a silently-broken bundle into a build failure.
-function assertPlatformPackagePresent(packageDir, arch) {
-  const nodeModulesDir = path.dirname(packageDir);
-  const platformBinary = path.join(nodeModulesDir, "@esbuild", `darwin-${arch}`, "bin", "esbuild");
-  if (!existsSync(platformBinary)) {
-    throw new Error(
-      `Refusing to prune downloaded esbuild binaries: ${path.relative(nodeModulesDir, packageDir)} has no ` +
-      `sibling @esbuild/darwin-${arch} at ${platformBinary}. The packaged app would have no esbuild binary to load.`,
-    );
-  }
-}
-
-export function normalizeDarwinEsbuildBinaries({ bundleServerDir, arch, resolvePlatformBinary }) {
+export function normalizeDarwinEsbuildBinaries({ bundleServerDir, arch, resolvePlatformPackage }) {
   if (arch !== "x64" && arch !== "arm64") {
     throw new Error(`Unsupported Darwin esbuild architecture '${arch}'.`);
+  }
+  // A mistyped bundle path otherwise normalizes nothing and reports success,
+  // which is the failure mode that is hardest to notice.
+  if (!bundleServerDir || !existsSync(bundleServerDir)) {
+    throw new Error(`Bundle server directory to normalize does not exist: ${bundleServerDir ?? "unknown"}`);
   }
 
   const targets = collectEsbuildBinaryTargets(bundleServerDir);
   const sourceByVersion = new Map();
 
   for (const target of targets) {
-    let sourceBinary = sourceByVersion.get(target.version);
-    if (!sourceBinary) {
-      sourceBinary = resolvePlatformBinary({ arch, version: target.version });
+    let sourcePackageDir = sourceByVersion.get(target.version);
+    if (!sourcePackageDir) {
+      sourcePackageDir = resolvePlatformPackage({ arch, version: target.version });
+      const sourceBinary = sourcePackageDir
+        ? path.join(sourcePackageDir, "bin", "esbuild")
+        : null;
       if (!sourceBinary || !existsSync(sourceBinary)) {
-        throw new Error(`Darwin ${arch} esbuild ${target.version} binary not found: ${sourceBinary ?? "unknown"}`);
+        throw new Error(
+          `Darwin ${arch} esbuild ${target.version} package not found: ${sourcePackageDir ?? "unknown"}`,
+        );
       }
-      sourceByVersion.set(target.version, sourceBinary);
+      sourceByVersion.set(target.version, sourcePackageDir);
     }
 
-    cpSync(sourceBinary, target.binaryPath);
+    // The CLI entry point: esbuild's postinstall overwrites bin/esbuild with the
+    // host binary so direct invocations skip the JS shim.
+    cpSync(path.join(sourcePackageDir, "bin", "esbuild"), target.binaryPath);
 
-    assertPlatformPackagePresent(target.packageDir, arch);
+    // The JS API entry point, which is what the server actually uses.
+    target.platformPackageDir = materializePlatformPackage(target.packageDir, arch, sourcePackageDir);
     target.prunedDownloads = pruneForeignDownloadedEsbuildBinaries(target.packageDir, arch);
   }
 
-  return targets;
+  const prunedPlatformPackages = pruneForeignPlatformPackages(bundleServerDir, arch);
+
+  return { targets, prunedPlatformPackages };
 }
 
-export function installDarwinEsbuildBinary({ arch, version, cacheRootDir, execFileSync }) {
+export function installDarwinEsbuildPackage({ arch, version, cacheRootDir, execFileSync }) {
   const packageName = `@esbuild/darwin-${arch}`;
   const installDir = path.join(cacheRootDir, `${arch}-${version}`);
-  const binaryPath = path.join(installDir, "package", "bin", "esbuild");
+  const packageDir = path.join(installDir, "package");
+  const binaryPath = path.join(packageDir, "bin", "esbuild");
 
-  if (existsSync(binaryPath)) return binaryPath;
+  if (existsSync(binaryPath)) return packageDir;
 
   mkdirSync(installDir, { recursive: true });
   const packOutput = execFileSync(
@@ -143,5 +219,5 @@ export function installDarwinEsbuildBinary({ arch, version, cacheRootDir, execFi
     throw new Error(`npm pack did not contain ${packageName}@${version} at ${binaryPath}.`);
   }
 
-  return binaryPath;
+  return packageDir;
 }

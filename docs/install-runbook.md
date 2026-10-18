@@ -379,19 +379,38 @@ server version is independent of this and is recorded in
    a future `@electron/osx-sign` bounds the walk upstream. Nothing to do by hand on CI or on
    your own Mac — `pnpm install` applies the patch.
 
-   **Cross-arch esbuild leftovers.** GitHub's `macos-latest` runners are Apple Silicon, so
-   building the **x64** bundle is a cross-install. esbuild's `postinstall` runs on the build
-   host rather than the target and leaves two host-arch artifacts behind: it overwrites
-   `<pkg>/bin/esbuild`, and it downloads a second copy to
-   `<pkg>/lib/downloaded-@esbuild-darwin-arm64-esbuild`. The first was already normalized; the
-   second was not, and [`Release Desktop` #4](https://github.com/whit3hat/haven-office/actions/runs/39081663700)
-   failed on it — `verify-macos-release.mjs` correctly refused an arm64 Mach-O binary inside
-   an x86_64 app. That file is unreachable on the target (esbuild resolves its binary by the
-   *running* platform, so an Intel Mac only ever loads `@esbuild/darwin-x64/bin/esbuild`), so
-   `scripts/esbuild-normalization.mjs` now prunes it — after asserting the target-arch package
-   is actually present, which turns a silently-broken bundle into a build failure. Look for
-   `[prepare-server] Pruned host-arch esbuild download` in the log. The verifier's
-   architecture check was deliberately **not** loosened.
+   **Cross-arch esbuild, and why the x64 bundle needs fixing up.** GitHub's `macos-latest`
+   runners are Apple Silicon, so building the **x64** bundle is a cross-install, and npm does
+   not cross-install esbuild correctly. Measured 2026-10-18 with npm 11.19.0: `npm install
+   --production --os=darwin --cpu=x64 --arch=x64` of `@paperclipai/server` installs the
+   **build host's** platform package (`@esbuild/darwin-arm64` on the runner,
+   `@esbuild/linux-x64` when reproduced here) and *not* `@esbuild/darwin-x64`. `--os`/`--cpu`
+   do not reach these optional platform dependencies. esbuild's `postinstall` then also runs
+   on the host, overwriting `<pkg>/bin/esbuild` with a host binary and downloading a second
+   host copy to `<pkg>/lib/downloaded-@esbuild-<host-platform>-esbuild`.
+
+   That produces two distinct failures, and both have happened:
+
+   - [`Release Desktop` #4](https://github.com/whit3hat/haven-office/actions/runs/39081663700)
+     built both DMGs and then `verify-macos-release.mjs` correctly refused an arm64 Mach-O
+     binary inside an x86_64 app.
+   - [`Release Desktop` #5](https://github.com/whit3hat/haven-office/actions/runs/39083766972)
+     failed in `prepare-server`, because the first fix assumed the target platform package was
+     already sitting beside each nested `esbuild` copy. It is not there at all.
+
+   So `scripts/esbuild-normalization.mjs` **materializes** `@esbuild/darwin-<arch>` next to
+   every nested `esbuild` copy, from an `npm pack` of the real package, and prunes every
+   host-arch leftover — the foreign `@esbuild/<platform>` packages and the foreign
+   `downloaded-…` files. Materializing it beside the copy is what the runtime actually
+   resolves: esbuild's `generateBinPath()` does
+   `require.resolve("@esbuild/darwin-<arch>/bin/esbuild")` from inside `esbuild/lib/main.js`,
+   and node's lookup walks that copy's own `node_modules` directory. Overwriting
+   `bin/esbuild` — all the script used to do — only ever fixed direct CLI invocations, not the
+   JS API the server uses.
+
+   In the log, look for `[prepare-server] Normalized …`, each followed by its
+   `platform package:` line, and `Pruned foreign esbuild platform package`. The verifier's
+   architecture check was deliberately **not** loosened in either fix.
 
    The run does three things in order:
 

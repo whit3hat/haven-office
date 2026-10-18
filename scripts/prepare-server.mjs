@@ -22,7 +22,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  installDarwinEsbuildBinary,
+  installDarwinEsbuildPackage,
   normalizeDarwinEsbuildBinaries,
 } from "./esbuild-normalization.mjs";
 import { assertSupportedNpm } from "./npm-preflight.mjs";
@@ -298,11 +298,11 @@ for (const arch of targetArches) {
       }
     }
     const esbuildCacheRoot = path.join(stagingDir, ".paperclip-esbuild-platform");
-    const normalizedEsbuildTargets = normalizeDarwinEsbuildBinaries({
+    const { targets: normalizedEsbuildTargets, prunedPlatformPackages } = normalizeDarwinEsbuildBinaries({
       bundleServerDir,
       arch,
-      resolvePlatformBinary: ({ version }) =>
-        installDarwinEsbuildBinary({
+      resolvePlatformPackage: ({ version }) =>
+        installDarwinEsbuildPackage({
           arch,
           version,
           cacheRootDir: esbuildCacheRoot,
@@ -313,11 +313,19 @@ for (const arch of targetArches) {
       console.log(
         `[prepare-server] Normalized ${path.relative(bundleServerDir, target.binaryPath)} for darwin-${arch}.`,
       );
+      console.log(
+        `[prepare-server]   platform package: ${path.relative(bundleServerDir, target.platformPackageDir)}`,
+      );
       for (const pruned of target.prunedDownloads ?? []) {
         console.log(
-          `[prepare-server] Pruned host-arch esbuild download ${path.relative(bundleServerDir, pruned)}.`,
+          `[prepare-server]   pruned host-arch download ${path.relative(bundleServerDir, pruned)}`,
         );
       }
+    }
+    for (const pruned of prunedPlatformPackages) {
+      console.log(
+        `[prepare-server] Pruned foreign esbuild platform package ${path.relative(bundleServerDir, pruned)}.`,
+      );
     }
   }
 

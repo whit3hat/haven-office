@@ -1,20 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { normalizeDarwinEsbuildBinaries } from "../scripts/esbuild-normalization.mjs";
 
-// Mirrors a real cross-installed bundle: the `esbuild` wrapper, its sibling
-// `@esbuild/darwin-<arch>` platform package (what the runtime actually
-// resolves), and any host-arch leftovers esbuild's postinstall dropped in lib/.
+// Mirrors a real cross-installed bundle, measured 2026-10-18 from `npm install
+// --production --os=darwin --cpu=x64 --arch=x64` of @paperclipai/server on a
+// non-darwin-x64 host: the nested `esbuild` wrapper with a host-arch
+// `bin/esbuild`, a `@esbuild/<host-platform>` package npm installed instead of
+// the target's, and whatever esbuild's postinstall downloaded for the host.
 function writeEsbuildFixture(
   rootDir,
   relativeDir,
   version,
   contents = "wrong-architecture",
-  { platformArch = "arm64", downloaded = [] } = {},
+  { platformPackages = ["darwin-arm64"], downloaded = [] } = {},
 ) {
   const nodeModulesDir = join(rootDir, relativeDir, "node_modules");
   const packageDir = join(nodeModulesDir, "esbuild");
@@ -22,10 +25,10 @@ function writeEsbuildFixture(
   writeFileSync(join(packageDir, "package.json"), `${JSON.stringify({ name: "esbuild", version })}\n`, "utf8");
   writeFileSync(join(packageDir, "bin", "esbuild"), contents, "utf8");
 
-  if (platformArch) {
-    const platformBinDir = join(nodeModulesDir, "@esbuild", `darwin-${platformArch}`, "bin");
+  for (const platform of platformPackages) {
+    const platformBinDir = join(nodeModulesDir, "@esbuild", platform, "bin");
     mkdirSync(platformBinDir, { recursive: true });
-    writeFileSync(join(platformBinDir, "esbuild"), `darwin-${platformArch}-platform-package`, "utf8");
+    writeFileSync(join(platformBinDir, "esbuild"), `${platform}-platform-package`, "utf8");
   }
 
   if (downloaded.length > 0) {
@@ -38,6 +41,20 @@ function writeEsbuildFixture(
   return join(packageDir, "bin", "esbuild");
 }
 
+// Stands in for installDarwinEsbuildPackage: the extracted `package/` directory
+// of an `npm pack @esbuild/darwin-<arch>@<version>` tarball.
+function writePlatformPackageSource(rootDir, arch, version) {
+  const sourceDir = join(rootDir, "platform-packages", `${arch}-${version}`, "package");
+  mkdirSync(join(sourceDir, "bin"), { recursive: true });
+  writeFileSync(
+    join(sourceDir, "package.json"),
+    `${JSON.stringify({ name: `@esbuild/darwin-${arch}`, version })}\n`,
+    "utf8",
+  );
+  writeFileSync(join(sourceDir, "bin", "esbuild"), `darwin-${arch}-${version}`, "utf8");
+  return sourceDir;
+}
+
 test("normalizeDarwinEsbuildBinaries replaces every nested esbuild binary with the target architecture", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "paperclip-esbuild-normalization-test-"));
 
@@ -45,30 +62,26 @@ test("normalizeDarwinEsbuildBinaries replaces every nested esbuild binary with t
     const firstTarget = writeEsbuildFixture(tempRoot, "", "0.28.2");
     const secondTarget = writeEsbuildFixture(tempRoot, "node_modules/@paperclipai/adapter-utils", "0.28.2");
     const thirdTarget = writeEsbuildFixture(tempRoot, "node_modules/example", "0.27.0");
-    const sourceByVersion = new Map();
     const resolveCalls = [];
 
-    for (const version of ["0.28.2", "0.27.0"]) {
-      const source = join(tempRoot, "platform-binaries", version, "esbuild");
-      mkdirSync(join(tempRoot, "platform-binaries", version), { recursive: true });
-      writeFileSync(source, `darwin-arm64-${version}`, "utf8");
-      sourceByVersion.set(version, source);
-    }
-
-    const targets = normalizeDarwinEsbuildBinaries({
+    const { targets } = normalizeDarwinEsbuildBinaries({
       bundleServerDir: tempRoot,
       arch: "arm64",
-      resolvePlatformBinary: ({ arch, version }) => {
+      resolvePlatformPackage: ({ arch, version }) => {
         resolveCalls.push({ arch, version });
-        return sourceByVersion.get(version);
+        return writePlatformPackageSource(tempRoot, arch, version);
       },
     });
 
     assert.equal(targets.length, 3);
-    assert.deepEqual(resolveCalls, [
-      { arch: "arm64", version: "0.28.2" },
-      { arch: "arm64", version: "0.27.0" },
-    ]);
+    assert.deepEqual(
+      resolveCalls,
+      [
+        { arch: "arm64", version: "0.28.2" },
+        { arch: "arm64", version: "0.27.0" },
+      ],
+      "each esbuild version should be packed once and reused across copies",
+    );
     assert.equal(readFileSync(firstTarget, "utf8"), "darwin-arm64-0.28.2");
     assert.equal(readFileSync(secondTarget, "utf8"), "darwin-arm64-0.28.2");
     assert.equal(readFileSync(thirdTarget, "utf8"), "darwin-arm64-0.27.0");
@@ -77,31 +90,69 @@ test("normalizeDarwinEsbuildBinaries replaces every nested esbuild binary with t
   }
 });
 
-// Regression: Release Desktop #4 packaged an x64 bundle on an arm64 runner and
-// verify-macos-release rejected it — the nested esbuild copies still carried
-// `lib/downloaded-@esbuild-darwin-arm64-esbuild`, a Mach-O arm64 binary inside
-// an x86_64 app. Normalizing bin/esbuild alone was not enough.
-test("normalizeDarwinEsbuildBinaries prunes host-arch downloaded binaries from a cross-installed bundle", () => {
+// Regression: Release Desktop #5 failed in prepare-server because the previous
+// version of this module asserted the target platform package was already a
+// sibling of each nested esbuild copy. It is not. A cross-install installs the
+// *build host's* platform package, so the target's has to be materialized.
+test("normalizeDarwinEsbuildBinaries materializes the platform package the runtime resolves", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "paperclip-esbuild-materialize-test-"));
+
+  try {
+    writeEsbuildFixture(tempRoot, "node_modules/@paperclipai/adapter-utils", "0.28.2", "wrong-architecture", {
+      // What npm actually produced on the arm64 runner: only the host's package.
+      platformPackages: ["darwin-arm64"],
+      downloaded: ["downloaded-@esbuild-darwin-arm64-esbuild"],
+    });
+
+    const { targets } = normalizeDarwinEsbuildBinaries({
+      bundleServerDir: tempRoot,
+      arch: "x64",
+      resolvePlatformPackage: ({ arch, version }) => writePlatformPackageSource(tempRoot, arch, version),
+    });
+
+    const nodeModulesDir = join(tempRoot, "node_modules/@paperclipai/adapter-utils/node_modules");
+    assert.equal(targets[0].platformPackageDir, join(nodeModulesDir, "@esbuild", "darwin-x64"));
+    assert.equal(
+      readFileSync(join(nodeModulesDir, "@esbuild/darwin-x64/bin/esbuild"), "utf8"),
+      "darwin-x64-0.28.2",
+    );
+
+    // The check that matters: this is the exact lookup esbuild's generateBinPath
+    // performs from inside lib/main.js.
+    const libDir = join(nodeModulesDir, "esbuild", "lib");
+    mkdirSync(libDir, { recursive: true });
+    writeFileSync(join(libDir, "main.js"), "", "utf8");
+    assert.equal(
+      createRequire(join(libDir, "main.js")).resolve("@esbuild/darwin-x64/bin/esbuild"),
+      join(nodeModulesDir, "@esbuild/darwin-x64/bin/esbuild"),
+      "the materialized package must be what node resolves from the esbuild copy",
+    );
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+// Regression: Release Desktop #4 built both DMGs and then verify-macos-release
+// rejected the x64 bundle — it still carried host-arch Mach-O binaries, both as
+// `lib/downloaded-@esbuild-darwin-arm64-esbuild` and as the whole
+// `@esbuild/darwin-arm64` package npm installed for the runner.
+test("normalizeDarwinEsbuildBinaries prunes every host-arch leftover from a cross-installed bundle", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "paperclip-esbuild-prune-test-"));
 
   try {
     writeEsbuildFixture(tempRoot, "", "0.28.2", "wrong-architecture", {
-      platformArch: "x64",
+      platformPackages: ["darwin-arm64", "darwin-x64"],
       downloaded: ["downloaded-@esbuild-darwin-arm64-esbuild", "downloaded-@esbuild-darwin-x64-esbuild"],
     });
     writeEsbuildFixture(tempRoot, "node_modules/@paperclipai/adapter-utils", "0.28.2", "wrong-architecture", {
-      platformArch: "x64",
+      platformPackages: ["darwin-arm64"],
       downloaded: ["downloaded-@esbuild-darwin-arm64-esbuild"],
     });
 
-    const source = join(tempRoot, "platform-binaries", "esbuild");
-    mkdirSync(join(tempRoot, "platform-binaries"), { recursive: true });
-    writeFileSync(source, "darwin-x64-0.28.2", "utf8");
-
-    const targets = normalizeDarwinEsbuildBinaries({
+    const { targets, prunedPlatformPackages } = normalizeDarwinEsbuildBinaries({
       bundleServerDir: tempRoot,
       arch: "x64",
-      resolvePlatformBinary: () => source,
+      resolvePlatformPackage: ({ arch, version }) => writePlatformPackageSource(tempRoot, arch, version),
     });
 
     const libDir = join(tempRoot, "node_modules", "esbuild", "lib");
@@ -128,38 +179,42 @@ test("normalizeDarwinEsbuildBinaries prunes host-arch downloaded binaries from a
     );
 
     assert.deepEqual(
-      targets.flatMap((target) => (target.prunedDownloads ?? []).map((entry) => entry.endsWith("arm64-esbuild"))),
+      prunedPlatformPackages.map((entry) => entry.endsWith("darwin-arm64")),
       [true, true],
-      "both pruned paths should be reported back to the caller",
+      "every foreign platform package should be pruned and reported",
     );
+    for (const target of targets) {
+      assert.deepEqual(
+        readdirSync(join(target.packageDir, "..", "@esbuild")),
+        ["darwin-x64"],
+        "only the target platform package should survive beside each copy",
+      );
+    }
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
-test("normalizeDarwinEsbuildBinaries refuses to prune when the target platform package is missing", () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), "paperclip-esbuild-prune-guard-test-"));
+test("normalizeDarwinEsbuildBinaries fails when the packed platform package has no binary", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "paperclip-esbuild-source-guard-test-"));
 
   try {
-    // No sibling @esbuild/darwin-x64: pruning here would leave the packaged app
-    // with no esbuild binary it can load at all, so this must fail the build.
     writeEsbuildFixture(tempRoot, "", "0.28.2", "wrong-architecture", {
-      platformArch: null,
+      platformPackages: ["darwin-arm64"],
       downloaded: ["downloaded-@esbuild-darwin-arm64-esbuild"],
     });
 
-    const source = join(tempRoot, "platform-binaries", "esbuild");
-    mkdirSync(join(tempRoot, "platform-binaries"), { recursive: true });
-    writeFileSync(source, "darwin-x64-0.28.2", "utf8");
+    const emptySource = join(tempRoot, "platform-packages", "empty");
+    mkdirSync(emptySource, { recursive: true });
 
     assert.throws(
       () =>
         normalizeDarwinEsbuildBinaries({
           bundleServerDir: tempRoot,
           arch: "x64",
-          resolvePlatformBinary: () => source,
+          resolvePlatformPackage: () => emptySource,
         }),
-      /Refusing to prune downloaded esbuild binaries/,
+      /Darwin x64 esbuild 0\.28\.2 package not found/,
     );
 
     assert.equal(
@@ -172,13 +227,25 @@ test("normalizeDarwinEsbuildBinaries refuses to prune when the target platform p
   }
 });
 
+test("normalizeDarwinEsbuildBinaries rejects a bundle directory that is not there", () => {
+  assert.throws(
+    () =>
+      normalizeDarwinEsbuildBinaries({
+        bundleServerDir: join(tmpdir(), "paperclip-esbuild-absent-bundle"),
+        arch: "x64",
+        resolvePlatformPackage: () => "/unused",
+      }),
+    /Bundle server directory to normalize does not exist/,
+  );
+});
+
 test("normalizeDarwinEsbuildBinaries rejects unsupported architectures", () => {
   assert.throws(
     () =>
       normalizeDarwinEsbuildBinaries({
         bundleServerDir: "/unused",
         arch: "ia32",
-        resolvePlatformBinary: () => "/unused",
+        resolvePlatformPackage: () => "/unused",
       }),
     /Unsupported Darwin esbuild architecture/,
   );
