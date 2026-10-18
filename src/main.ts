@@ -5,6 +5,8 @@ import {
   dialog,
   ipcMain,
   Menu,
+  // Aliased because `net` in this file is Node's socket module, imported below.
+  net as electronNet,
   screen,
   session,
   shell,
@@ -27,6 +29,7 @@ import {
   shouldStopAttemptedServer,
 } from "./connection/local-server-lifecycle";
 import { probeLocalServerHealth } from "./connection/local-server-health";
+import { createManualRedirectFetch } from "./connection/manual-redirect-fetch";
 import { provisionBundledPlugins } from "./connection/plugin-provisioning";
 import { preflightRemoteConnection } from "./connection/preflight";
 import { ConnectionStore, getConnectionsFilePath } from "./connection/profiles";
@@ -1106,6 +1109,27 @@ function remotePartitionKey(profileId: string | null, origin: string): string {
   return `persist:paperclip-remote-${hash}`;
 }
 
+/**
+ * Probe a remote through the same Chromium session the window will use.
+ *
+ * Verifying over a different network stack than we connect over is how you get
+ * a "Verify Remote" that disagrees with "Connect Remote". The global `fetch` in
+ * the main process is Node's undici: it carries Node's own bundled CA list
+ * instead of the OS trust store, so a host issued by a private lab CA fails
+ * verification while the browser window loads it fine, and it ignores the proxy
+ * and client-certificate configuration the session applies.
+ */
+function remotePartitionFetch(profileId: string | null, origin: string): typeof fetch {
+  const preflightSession = session.fromPartition(remotePartitionKey(profileId, origin));
+  // electronNet.request rather than preflightSession.fetch: both use Chromium's
+  // stack, but only the former lets us decline a redirect and still see it. See
+  // src/connection/manual-redirect-fetch.ts.
+  return createManualRedirectFetch({
+    createRequest: ({ method, url, redirect }) =>
+      electronNet.request({ method, url, redirect, session: preflightSession }),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Connection boot flows
 // ---------------------------------------------------------------------------
@@ -1363,17 +1387,10 @@ async function bootRemote(options: {
     url: normalized.normalizedUrl,
   });
 
-  const preflightPartition = remotePartitionKey(options.profileId ?? null, normalized.origin);
-  const preflightSession = session.fromPartition(preflightPartition);
-  const partitionFetch: typeof fetch = (input, init) =>
-    preflightSession.fetch(
-      input instanceof URL ? input.toString() : input,
-      init,
-    ) as Promise<Response>;
   const result = await preflightRemoteConnection({
     remoteUrl: normalized.normalizedUrl,
     localServerVersion: resolveLocalServerVersion(),
-    fetchImpl: partitionFetch,
+    fetchImpl: remotePartitionFetch(options.profileId ?? null, normalized.origin),
   });
 
   if (bootId !== bootSequence) {
@@ -1542,11 +1559,25 @@ function registerLauncherIpc(): void {
     return buildLauncherSnapshot();
   });
 
-  ipcMain.handle("launcher:verify-remote", (_event, payload: { remoteUrl: string }) =>
-    preflightRemoteConnection({
+  ipcMain.handle("launcher:verify-remote", (_event, payload: { remoteUrl: string }) => {
+    // Verify over the very partition Connect Remote would use. Without this the
+    // button probed with Node's global fetch while the connection used the
+    // Chromium session, so the two could disagree about the same host.
+    let fetchImpl: typeof fetch | undefined;
+    try {
+      fetchImpl = remotePartitionFetch(null, normalizeRemoteUrl(payload.remoteUrl).origin);
+    } catch {
+      // No parseable origin means no partition to probe through; preflight
+      // reports invalid_url without issuing a request.
+      fetchImpl = undefined;
+    }
+
+    return preflightRemoteConnection({
       remoteUrl: payload.remoteUrl,
       localServerVersion: resolveLocalServerVersion(),
-    }));
+      fetchImpl,
+    });
+  });
 
   ipcMain.handle("launcher:connect-local", async (_event, payload: { rememberChoice: boolean }) => {
     void bootLocal({

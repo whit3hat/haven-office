@@ -369,6 +369,113 @@ test("preflight classifies TLS failures", async () => {
   assert.equal(result.reason, "tls_error");
 });
 
+// The test above throws an error whose *message* carries the keyword. No real
+// fetch does that: undici — the global fetch in Node and in Electron's main
+// process — rejects every transport failure as the literal "fetch failed" and
+// puts the diagnosis on `cause`. Measured against badssl.com on 2026-10-18.
+// The tests below use that real shape, which the old keyword match on
+// `error.message` could not classify and reported to the user as "fetch failed".
+function undiciFetchFailure(causeMessage, code) {
+  const cause = new Error(causeMessage);
+  if (code) {
+    cause.code = code;
+  }
+  return Object.assign(new TypeError("fetch failed"), { cause });
+}
+
+test("preflight reads the cause chain undici hides the real failure behind", async () => {
+  const result = await preflightRemoteConnection({
+    remoteUrl: "https://paperclip.lab.havenco.xyz",
+    fetchImpl: async () => {
+      throw undiciFetchFailure(
+        "self-signed certificate; if the root CA is installed locally, try running Node.js with --use-system-ca",
+        "DEPTH_ZERO_SELF_SIGNED_CERT",
+      );
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "tls_error");
+  // The whole point: the user must not be told "fetch failed".
+  assert.notEqual(result.detail, "fetch failed");
+  assert.match(result.detail, /self-signed certificate/);
+  assert.match(result.detail, /DEPTH_ZERO_SELF_SIGNED_CERT/);
+});
+
+test("preflight classifies real TLS error codes, not just keyword messages", async () => {
+  const cases = [
+    ["certificate has expired", "CERT_HAS_EXPIRED"],
+    ["Hostname/IP does not match certificate's altnames", "ERR_TLS_CERT_ALTNAME_INVALID"],
+    ["unable to verify the first certificate", "UNABLE_TO_VERIFY_LEAF_SIGNATURE"],
+    // Chromium's own code, which is what the session-backed probe reports.
+    ["net::ERR_CERT_AUTHORITY_INVALID", "ERR_CERT_AUTHORITY_INVALID"],
+  ];
+
+  for (const [message, code] of cases) {
+    const result = await preflightRemoteConnection({
+      remoteUrl: "https://paperclip.lab.havenco.xyz",
+      fetchImpl: async () => {
+        throw undiciFetchFailure(message, code);
+      },
+    });
+    assert.equal(result.reason, "tls_error", `${code} should classify as tls_error`);
+    assert.match(result.detail, new RegExp(code.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+});
+
+test("preflight reports a connection failure as unreachable with the real reason", async () => {
+  const result = await preflightRemoteConnection({
+    remoteUrl: "https://paperclip.lab.havenco.xyz",
+    fetchImpl: async () => {
+      throw undiciFetchFailure("connect ECONNREFUSED 192.168.4.38:443", "ECONNREFUSED");
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "unreachable");
+  assert.match(result.detail, /ECONNREFUSED/);
+  assert.notEqual(result.detail, "fetch failed");
+});
+
+test("preflight names a redirect instead of calling the host non-Paperclip", async () => {
+  const result = await preflightRemoteConnection({
+    remoteUrl: "https://paperclip.lab.havenco.xyz",
+    fetchImpl: async () =>
+      new Response(null, {
+        status: 302,
+        headers: { location: "https://sso.havenco.xyz/login?next=%2Fapi%2Fhealth" },
+      }),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "not_paperclip");
+  assert.match(result.detail, /redirected \(HTTP 302\)/);
+  assert.match(result.detail, /sso\.havenco\.xyz/);
+  // The old message blamed the host for not exposing the endpoint, which sent
+  // readers looking in the wrong place.
+  assert.doesNotMatch(result.detail, /does not appear to expose/);
+});
+
+test("preflight distinguishes a non-JSON answer from a bad status", async () => {
+  const html = await preflightRemoteConnection({
+    remoteUrl: "https://paperclip.lab.havenco.xyz",
+    fetchImpl: async () =>
+      new Response("<!doctype html><title>nope</title>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+  });
+  assert.equal(html.reason, "not_paperclip");
+  assert.match(html.detail, /text\/html/);
+
+  const gone = await preflightRemoteConnection({
+    remoteUrl: "https://paperclip.lab.havenco.xyz",
+    fetchImpl: async () => new Response("", { status: 404 }),
+  });
+  assert.equal(gone.reason, "not_paperclip");
+  assert.match(gone.detail, /HTTP 404/);
+});
+
 function jsonResponse(body, status) {
   return new Response(JSON.stringify(body), {
     status,

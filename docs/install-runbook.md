@@ -511,9 +511,31 @@ already installed it keeps it; publish a higher version to move them.
 | **Wrong architecture** — app is very slow, or won't start | You installed the Intel `.dmg` on Apple Silicon or vice versa. Check About This Mac, delete the app, install the other one. |
 | **Local mode hangs on "Starting database"** | First launch initializes an embedded Postgres and is slow. If it is still stuck after ~5 minutes, check the server log (below). |
 | **Local mode opens but the office page 404s** | The bundled office plugin failed to install. The app deliberately opens anyway rather than refusing to launch. Check the server log for `[plugins]`, and see [`local-mode-plugin.md`](local-mode-plugin.md). Use the **View → Board** menu item to get a working view meanwhile. |
-| **Remote verification fails** | The app tells you which check failed. A private authenticated deployment redacting fields is fine and still verifies; a wrong host or an offline server is not. Confirm the URL works in a browser first. |
+| **Remote verification fails** | The app tells you which check failed — see [the table below](#remote-verification-messages) for what each message means. A private authenticated deployment redacting fields is fine and still verifies; a wrong host or an offline server is not. Confirm the URL works in a browser first. |
 | **Signed in on the web but not in the app** | Sessions are not shared with your browser. Sign in inside the app window. |
 | **No updates ever offered** | Check that the newest release has a `latest-mac.yml` asset and is not a draft or prerelease. |
+
+<a id="remote-verification-messages"></a>
+
+### Remote verification messages
+
+**Verify Remote** makes exactly two requests — `GET /api/health` and
+`GET /api/auth/get-session` against the origin you typed — and reports the first thing that
+goes wrong. It probes over the same Chromium network session the connection itself will
+use, so a pass here means the real connection can reach the host too.
+
+| What it says | What it means | What to do |
+|---|---|---|
+| **TLS validation failed** — *"self-signed certificate (DEPTH_ZERO_SELF_SIGNED_CERT)"*, *"certificate has expired"*, *"unable to verify the first certificate"* | The host answered, but macOS does not trust its certificate. For a lab host this usually means a private CA. | Install the lab CA in **Keychain Access → System → Certificates** and mark it trusted, then verify again. The app uses the system trust store, so once Safari trusts the host, so does Haven Office. |
+| **Host unreachable** — *"connect ECONNREFUSED …"*, *"ERR_NAME_NOT_RESOLVED"*, *"ERR_CONNECTION_TIMED_OUT"* | Nothing answered on that address. | Check you are on the lab network or VPN, and that the URL resolves in a browser from the same Mac. |
+| **Host reachable, not Paperclip** — *"…/api/health redirected (HTTP 302) to …"* | A gateway or SSO proxy is intercepting the probe. The app deliberately does **not** follow redirects while verifying, because the URL is untrusted at that point. | Point the connection at the Paperclip origin itself rather than a vanity or gateway URL. |
+| **Host reachable, not Paperclip** — *"…answered with "text/html" rather than JSON"* | Something is listening, but it is not a Paperclip server — often a default web-server landing page. | Check the port and hostname. |
+| **Remote not eligible** | The server is configured for loopback-only local use. | It needs reconfiguring to authenticated mode; that is a server-side change, not a client one. |
+| **Remote auth is not ready** | Paperclip is up but its auth subsystem has not finished starting. | Wait and retry. If it persists, the server needs attention. |
+
+> If the message is just the bare word **"fetch failed"** with no reason after it, you are on
+> a build older than `v2026.10.7`. That build could not report *why* a connection failed.
+> Update before troubleshooting any further.
 
 **The server log** is the first place to look for anything local-mode related:
 

@@ -61,7 +61,7 @@ export async function preflightRemoteConnection(options: PreflightOptions): Prom
         origin: normalized.origin,
         insecureTransport: normalized.insecureTransport,
         reason: "not_paperclip",
-        detail: "This host does not appear to expose the Paperclip health endpoint.",
+        detail: describeUnusableHealthResponse(healthResponse, normalized.origin),
         warning: normalized.warning,
       });
     }
@@ -190,28 +190,73 @@ export async function preflightRemoteConnection(options: PreflightOptions): Prom
       origin: normalized.origin,
       insecureTransport: normalized.insecureTransport,
       reason: classifyFetchError(error),
-      detail: error instanceof Error ? error.message : "Remote preflight failed.",
+      detail: describeFetchError(error),
       warning: normalized.warning,
     });
   }
+}
+
+interface HealthProbeResponse {
+  status: number;
+  body: unknown;
+  contentType: string;
+  location: string | null;
 }
 
 async function fetchJson(
   fetchImpl: typeof fetch,
   url: URL,
   timeoutMs: number,
-): Promise<{ status: number; body: unknown }> {
+): Promise<HealthProbeResponse> {
   const response = await fetchWithTimeout(fetchImpl, url, timeoutMs);
   const contentType = response.headers.get("content-type") ?? "";
+  const location = response.headers.get("location");
 
   if (!contentType.toLowerCase().includes("application/json")) {
-    return { status: response.status, body: null };
+    return { status: response.status, body: null, contentType, location };
   }
 
   return {
     status: response.status,
     body: await response.json(),
+    contentType,
+    location,
   };
+}
+
+/**
+ * Explain why a health probe did not yield a usable payload.
+ *
+ * The old single sentence said "does not appear to expose the Paperclip health
+ * endpoint" for every shape of miss, which is actively misleading for the two
+ * most common real causes: a reverse proxy or SSO gateway redirecting the
+ * probe, and a host that answers but with HTML. We deliberately do not follow
+ * redirects here (see fetchWithTimeout), so a 3xx is a result to report, not a
+ * hop to take.
+ */
+function describeUnusableHealthResponse(response: HealthProbeResponse, origin: string): string {
+  if (response.status >= 300 && response.status < 400) {
+    const target = response.location ? ` to ${response.location}` : "";
+    return (
+      `${origin}/api/health redirected (HTTP ${response.status})${target}. `
+      + "Haven Office does not follow redirects while verifying a remote, so point the "
+      + "connection at the Paperclip origin itself rather than a gateway or vanity URL."
+    );
+  }
+
+  if (response.status !== 200) {
+    return `${origin}/api/health returned HTTP ${response.status}, not a Paperclip health payload.`;
+  }
+
+  if (!response.contentType.toLowerCase().includes("application/json")) {
+    const seen = response.contentType ? `"${response.contentType}"` : "no content-type";
+    return (
+      `${origin}/api/health answered with ${seen} rather than JSON. `
+      + "This host is reachable but does not look like a Paperclip server."
+    );
+  }
+
+  return `${origin}/api/health returned JSON that is not a recognizable Paperclip health payload.`;
 }
 
 async function fetchSession(
@@ -350,21 +395,105 @@ function buildFailure(input: {
   };
 }
 
-function classifyFetchError(error: unknown): RemotePreflightResult["reason"] {
-  if (error instanceof Error) {
-    const message = error.message.toLowerCase();
-    if (
-      message.includes("self-signed") ||
-      message.includes("certificate") ||
-      message.includes("unable to verify") ||
-      message.includes("tls")
-    ) {
-      return "tls_error";
+/**
+ * Flatten an error and everything on its `cause` chain.
+ *
+ * This exists because `fetch` hides the only useful part of a network failure.
+ * Undici — the global `fetch` in Node and in Electron's main process — rejects
+ * every transport failure as the literal `TypeError: fetch failed`, and puts
+ * the real reason ("certificate has expired", "connect ECONNREFUSED", …) on
+ * `error.cause`. Reading only `.message`, as this module used to, produced the
+ * useless user-facing detail "fetch failed" and defeated the keyword matching
+ * below, so every TLS rejection was reported as a plain unreachable host.
+ */
+function unwrapErrorChain(error: unknown): { messages: string[]; codes: string[] } {
+  const messages: string[] = [];
+  const codes: string[] = [];
+  const seen = new Set<unknown>();
+
+  let current: unknown = error;
+  // The chain is short in practice; the bound is only here so a cyclic or
+  // adversarially deep `cause` cannot spin.
+  for (let depth = 0; current != null && depth < 8; depth += 1) {
+    if (seen.has(current)) {
+      break;
+    }
+    seen.add(current);
+
+    if (current instanceof Error) {
+      if (current.message) {
+        messages.push(current.message);
+      }
+      const code = (current as { code?: unknown }).code;
+      if (typeof code === "string" && code) {
+        codes.push(code);
+      }
+      current = (current as { cause?: unknown }).cause;
+      continue;
     }
 
-    if (message.includes("abort") || message.includes("timed out")) {
-      return "unreachable";
+    if (typeof current === "string" && current) {
+      messages.push(current);
     }
+    break;
+  }
+
+  return { messages, codes };
+}
+
+/**
+ * Error codes that mean "we reached the host but refused its certificate".
+ * Node/OpenSSL codes come from undici; `ERR_CERT_*` / `ERR_SSL_*` come from
+ * Chromium, which is what Electron's session-backed fetch reports.
+ */
+const TLS_ERROR_CODES = [
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "CERT_HAS_EXPIRED",
+  "CERT_NOT_YET_VALID",
+  "CERT_UNTRUSTED",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+];
+
+function describeFetchError(error: unknown): string {
+  const { messages, codes } = unwrapErrorChain(error);
+
+  // The outermost message is the generic wrapper; anything deeper is the real
+  // diagnosis, so prefer the deepest one and keep the code alongside it.
+  const detail = messages.length > 1 ? messages[messages.length - 1] : messages[0];
+  if (!detail) {
+    return "Remote preflight failed.";
+  }
+
+  const code = codes.find((candidate) => !detail.includes(candidate));
+  return code ? `${detail} (${code})` : detail;
+}
+
+function classifyFetchError(error: unknown): RemotePreflightResult["reason"] {
+  const { messages, codes } = unwrapErrorChain(error);
+
+  if (
+    codes.some(
+      (code) =>
+        TLS_ERROR_CODES.includes(code) || code.startsWith("ERR_CERT_") || code.startsWith("ERR_SSL_"),
+    )
+  ) {
+    return "tls_error";
+  }
+
+  const haystack = messages.join(" ").toLowerCase();
+  if (
+    haystack.includes("self-signed") ||
+    haystack.includes("self signed") ||
+    haystack.includes("certificate") ||
+    haystack.includes("unable to verify") ||
+    haystack.includes("tls") ||
+    haystack.includes("ssl")
+  ) {
+    return "tls_error";
   }
 
   return "unreachable";
