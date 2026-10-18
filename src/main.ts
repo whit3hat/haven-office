@@ -29,11 +29,12 @@ import {
   shouldStopAttemptedServer,
 } from "./connection/local-server-lifecycle";
 import { probeLocalServerHealth } from "./connection/local-server-health";
-import { createManualRedirectFetch } from "./connection/manual-redirect-fetch";
+import { createPartitionProbeFetch } from "./connection/partition-probe-fetch";
 import { provisionBundledPlugins } from "./connection/plugin-provisioning";
 import { preflightRemoteConnection } from "./connection/preflight";
 import { ConnectionStore, getConnectionsFilePath } from "./connection/profiles";
 import { normalizeRemoteUrl } from "./connection/validate";
+import { partitionCookieReader } from "./paperclip/electron";
 import {
   applyDesktopUserDataOverride,
   assertIsolatedRuntimePaths,
@@ -1118,15 +1119,20 @@ function remotePartitionKey(profileId: string | null, origin: string): string {
  * instead of the OS trust store, so a host issued by a private lab CA fails
  * verification while the browser window loads it fine, and it ignores the proxy
  * and client-certificate configuration the session applies.
+ *
+ * The session alone does not make the probe *authenticated* — see
+ * src/connection/partition-probe-fetch.ts, which is where the cookies and the
+ * declined redirects both come from. This function is only the Electron wiring.
  */
 function remotePartitionFetch(profileId: string | null, origin: string): typeof fetch {
   const preflightSession = session.fromPartition(remotePartitionKey(profileId, origin));
   // electronNet.request rather than preflightSession.fetch: both use Chromium's
   // stack, but only the former lets us decline a redirect and still see it. See
   // src/connection/manual-redirect-fetch.ts.
-  return createManualRedirectFetch({
-    createRequest: ({ method, url, redirect }) =>
-      electronNet.request({ method, url, redirect, session: preflightSession }),
+  return createPartitionProbeFetch({
+    session: preflightSession,
+    createRequest: (init) => electronNet.request(init),
+    readCookies: partitionCookieReader(preflightSession),
   });
 }
 

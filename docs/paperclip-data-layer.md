@@ -90,6 +90,17 @@ API-key fallback for no reason at all.
 essential: the Paperclip session cookie is `httpOnly`, so nothing in a renderer
 could ever read it. This is a main-process-only capability.
 
+Remote preflight had the identical defect, found while writing this section and
+fixed the same two ways in HAV-45. Its probe was
+`electronNet.request({ …, session })` with no `credentials`, so every
+`/api/auth/get-session` answered `401` and a signed-in user was reported
+`signed_out` — which opened the server root instead of their remembered view.
+That transport now lives in `src/connection/partition-probe-fetch.ts`, which
+supplies both the option and the explicit header. `test/partition-probe-fetch.test.mjs`
+asserts the *request options* rather than injecting a `fetch` over them: the
+defect was in the options, so a test that replaces the whole transport —
+`test/connection-preflight.test.mjs` does — cannot see it in either direction.
+
 ### Do not hardcode the cookie name
 
 Paperclip configures better-auth with a per-instance prefix:
@@ -260,6 +271,14 @@ strategy swap, not a redesign. But it should be confirmed before a release:
    kinds are omitted or present as `0`.
 3. **`safeStorage` on a real Keychain.** Only needed if the fallback is ever
    used.
+4. **Preflight's session probe (HAV-45).** Same round trip, one layer down.
+   Connect to a remote you are signed in to and confirm the launcher says
+   "Opening verified remote…" rather than "Opening remote sign-in…", and that
+   the window opens on the remembered view instead of the server root. Then
+   point Verify Remote at a host that redirects `/api/health` and confirm it
+   still reports the redirect target, not an unreachable host — that is the one
+   interaction between the new `credentials: "include"` and the deliberate
+   `redirect: "manual"` handling that only Chromium can settle.
 
 ## 5. Module layout
 
