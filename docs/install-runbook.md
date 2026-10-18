@@ -412,6 +412,38 @@ server version is independent of this and is recorded in
    `platform package:` line, and `Pruned foreign esbuild platform package`. The verifier's
    architecture check was deliberately **not** loosened in either fix.
 
+   **node-gyp build intermediates, and the signature that can never exist.**
+   [`Release Desktop` #6](https://github.com/whit3hat/haven-office/actions/runs/39086082730)
+   built both DMGs, signed the whole bundle, and then failed verification on
+   `cpu-features/build/Release/obj.target/cpu_features/deps/cpu_features/src/filesystem.o`
+   with `code object is not signed at all`.
+
+   A `*.o` is a Mach-O relocatable object, so `@electron/osx-sign` picks it up — it signs
+   whatever `isBinaryFile` reports as binary — but `codesign` cannot attach a signature to a
+   relocatable object, so the file stays unsigned and `codesign --verify --strict` then
+   objects. **This is not specific to the unsigned path**; a signed build fails identically.
+
+   Any package node-gyp compiles leaves its whole intermediate tree beside the addon it
+   produced: `*.o`, `*.a`, `*.d`, `.deps/`, and the generated `Makefile`/`*.target.mk`.
+   Only the linked `*.node` is ever loaded. So `scripts/native-build-intermediates.mjs`
+   prunes them from the assembled bundle, and `scripts/macho.mjs` reads the Mach-O
+   **filetype** so the verifier stops demanding a signature on a relocatable object
+   (`MH_OBJECT`) or a debug companion (`MH_DSYM`) — while keeping both in the architecture
+   check, where a wrong-arch object really does mean a broken cross-compile.
+
+   The prune is narrow by measurement, not by hope. The directory name `build` is **not** the
+   signal: of the 15 `build` directories in the real cross-installed server tree (measured
+   2026-10-18), only one — ssh2's native `sshcrypto` binding — is node-gyp output, and the
+   other 14 hold compiled JavaScript (`three`, `pino`, `yargs`, `@grpc/grpc-js`,
+   `@opentelemetry/api`, …). A directory is treated as node-gyp output only when it carries
+   one of `config.gypi`, `binding.Makefile`, `Release/` or `Debug/`, and within one only
+   named intermediates are removed. Every `*.node` and every `*.dylib`/`*.so` is kept.
+
+   In the log, look for `[prepare-server] Pruned N build intermediate(s) from M node-gyp
+   build director(ies)`. If the verifier ever does report an unsignable Mach-O it lists it
+   under `unsignableMachOObject` rather than failing, which means something shipped an
+   object file the prune did not recognise — worth a look, not a release blocker.
+
    The run does three things in order:
 
    - `build-mac` prints **signed** or **unsigned** to the run summary, builds both arches

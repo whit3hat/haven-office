@@ -3,20 +3,12 @@ import { closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, rea
 import { basename, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
+import { MACH_O_MAGICS, isSignableMachOCode, machOFiletypes } from "./macho.mjs";
+
 const outputDir = resolve(process.argv[2] || "release/local-macos");
 const requireStapled = process.argv.includes("--require-stapled");
 const expectedIdentity = process.env.APPLE_CODESIGN_IDENTITY?.trim() || null;
 const expectedTeamId = process.env.APPLE_TEAM_ID?.trim() || null;
-const MACH_O_MAGICS = new Set([
-  "feedface",
-  "cefaedfe",
-  "feedfacf",
-  "cffaedfe",
-  "cafebabe",
-  "bebafeca",
-  "cafebabf",
-  "bfbafeca",
-]);
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -235,6 +227,13 @@ function collectChecks(appPath) {
   ].filter((target) => !isDormantAlternateArchBinary(target, expectedArchitectures));
   verifyBundledNativeArchitectures(nodeBinary, architectureTargets);
 
+  // A relocatable object or debug companion cannot carry a signature at all,
+  // so it is reported rather than codesign-verified. See isSignableMachOCode.
+  const signableAppServerMachOBinaries = appServerMachOBinaries.filter(isSignableMachOCode);
+  const unsignableAppServerMachOBinaries = appServerMachOBinaries.filter(
+    (target) => !isSignableMachOCode(target),
+  );
+
   const namedChecks = [
     ["appBundle", [appPath]],
     ["mainExecutable", mainExecutables],
@@ -244,10 +243,18 @@ function collectChecks(appPath) {
     ["nativeNodeModule", nativeNodeModules],
     ["nativeBareModule", nativeBareModules],
     ["nativeDylib", nativeDylibs],
-    ["appServerMachOBinary", appServerMachOBinaries],
+    ["appServerMachOBinary", signableAppServerMachOBinaries],
   ];
 
   const checks = {};
+
+  if (unsignableAppServerMachOBinaries.length > 0) {
+    checks.unsignableMachOObject = unsignableAppServerMachOBinaries.map((target) => ({
+      path: relative(target),
+      filetypes: machOFiletypes(target),
+      note: "Not a code object; codesign cannot sign it. Architecture still verified.",
+    }));
+  }
 
   for (const [label, targets] of namedChecks) {
     if (targets.length === 0) continue;

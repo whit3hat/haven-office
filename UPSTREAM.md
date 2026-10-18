@@ -25,6 +25,13 @@ git pull upstream master     # or: git rebase upstream/master
 - Upstream releases are **manually dispatched** (`workflow_dispatch`), not tag-triggered.
   `release.yml` takes a `ref`; `smoke-packaged-macos.yml` and `notarize-*.yml` take a
   release `tag`.
+- **Our server bundle is much larger than upstream's**, because we stage
+  `@paperclipai/server` and its whole `node_modules` into the app. Several macOS packaging
+  fix-ups exist only for that reason and have no upstream counterpart:
+  `scripts/esbuild-normalization.mjs`, `scripts/native-build-intermediates.mjs`,
+  `scripts/macho.mjs`, and the file-descriptor raise in `scripts/release-macos-local.mjs`.
+  Expect to keep them across a rebase; each is explained in
+  [`docs/install-runbook.md`](docs/install-runbook.md) § 7.
 
 ### Patched dependencies
 

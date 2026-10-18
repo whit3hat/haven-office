@@ -25,6 +25,7 @@ import {
   installDarwinEsbuildPackage,
   normalizeDarwinEsbuildBinaries,
 } from "./esbuild-normalization.mjs";
+import { pruneNativeBuildIntermediates } from "./native-build-intermediates.mjs";
 import { assertSupportedNpm } from "./npm-preflight.mjs";
 import {
   bundledPluginVersions,
@@ -327,6 +328,20 @@ for (const arch of targetArches) {
         `[prepare-server] Pruned foreign esbuild platform package ${path.relative(bundleServerDir, pruned)}.`,
       );
     }
+  }
+
+  // node-gyp leaves its whole intermediate tree beside each addon it builds.
+  // On darwin a stray `*.o` is a Mach-O that codesign cannot sign, which
+  // failed `Release Desktop` #6 in verification; everywhere it is dead weight.
+  console.log(`[prepare-server] Pruning native build intermediates for ${variant}...`);
+  const { removed: prunedIntermediates, buildDirs: gypBuildDirs } =
+    pruneNativeBuildIntermediates({ bundleServerDir });
+  console.log(
+    `[prepare-server] Pruned ${prunedIntermediates.length} build intermediate(s) ` +
+      `from ${gypBuildDirs.length} node-gyp build director(ies).`,
+  );
+  for (const pruned of prunedIntermediates) {
+    console.log(`[prepare-server]   pruned ${path.relative(bundleServerDir, pruned)}`);
   }
 
   stagePluginsInto(bundleDir);
