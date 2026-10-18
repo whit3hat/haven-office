@@ -1,0 +1,30 @@
+[
+  {
+    "agentId": "00000000-0000-4000-8000-000000000003",
+    "agentName": "Jarvis",
+    "agentStatus": "running",
+    "costCents": 0,
+    "inputTokens": 5225510,
+    "cachedInputTokens": 112577995,
+    "outputTokens": 1266693,
+    "apiRunCount": 0,
+    "subscriptionRunCount": 60,
+    "subscriptionCachedInputTokens": 112577995,
+    "subscriptionInputTokens": 5225510,
+    "subscriptionOutputTokens": 1266693
+  },
+  {
+    "agentId": "00000000-0000-4000-8000-000000000046",
+    "agentName": "Pepper",
+    "agentStatus": "idle",
+    "costCents": 0,
+    "inputTokens": 1878258,
+    "cachedInputTokens": 41975416,
+    "outputTokens": 463689,
+    "apiRunCount": 0,
+    "subscriptionRunCount": 21,
+    "subscriptionCachedInputTokens": 41975416,
+    "subscriptionInputTokens": 1878258,
+    "subscriptionOutputTokens": 463689
+  }
+]

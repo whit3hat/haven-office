@@ -1,0 +1,91 @@
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "companyId": "00000000-0000-4000-8000-000000000002",
+  "name": "Friday",
+  "role": "engineer",
+  "title": "Senior Web Developer",
+  "icon": "code",
+  "status": "running",
+  "reportsTo": "00000000-0000-4000-8000-000000000003",
+  "capabilities": "Builds and ships havenCo's web apps end to end: architecture, implementation, focused tests, and the path from a local change to a running app on the home server. Does not change Proxmox hosts.",
+  "adapterType": "claude_local",
+  "defaultEnvironmentId": null,
+  "budgetMonthlyCents": 0,
+  "spentMonthlyCents": 0,
+  "pauseReason": null,
+  "pausedAt": null,
+  "errorReason": null,
+  "permissions": {
+    "canCreateAgents": true,
+    "canCreateSkills": true
+  },
+  "lastHeartbeatAt": "2026-10-16T00:47:39.134Z",
+  "metadata": null,
+  "createdAt": "2026-10-04T20:56:44.111Z",
+  "updatedAt": "2026-10-18T21:52:18.564Z",
+  "urlKey": "friday",
+  "orgChainHealth": {
+    "status": "healthy",
+    "reason": "healthy",
+    "fullChain": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "companyId": "00000000-0000-4000-8000-000000000002",
+        "name": "Friday",
+        "status": "running",
+        "reportsTo": "00000000-0000-4000-8000-000000000003",
+        "depth": 0,
+        "relation": "self"
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000003",
+        "companyId": "00000000-0000-4000-8000-000000000002",
+        "name": "Jarvis",
+        "status": "running",
+        "reportsTo": null,
+        "depth": 1,
+        "relation": "ancestor"
+      }
+    ],
+    "firstInvalidAncestor": null,
+    "invalidAncestors": [],
+    "repairGuidance": null,
+    "pausedAncestors": [],
+    "escalationWarning": null
+  },
+  "chainOfCommand": [
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "name": "Jarvis",
+      "role": "general",
+      "title": null
+    }
+  ],
+  "access": {
+    "canAssignTasks": true,
+    "taskAssignSource": "agent_creator",
+    "membership": {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "companyId": "00000000-0000-4000-8000-000000000002",
+      "principalType": "agent",
+      "principalId": "00000000-0000-4000-8000-000000000001",
+      "status": "active",
+      "membershipRole": "member",
+      "createdAt": "2026-10-04T20:56:44.147Z",
+      "updatedAt": "2026-10-04T20:56:44.147Z"
+    },
+    "grants": [
+      {
+        "id": "00000000-0000-4000-8000-000000000005",
+        "companyId": "00000000-0000-4000-8000-000000000002",
+        "principalType": "agent",
+        "principalId": "00000000-0000-4000-8000-000000000001",
+        "permissionKey": "tasks:assign",
+        "scope": null,
+        "grantedByUserId": null,
+        "createdAt": "2026-10-04T20:56:44.156Z",
+        "updatedAt": "2026-10-04T20:56:44.156Z"
+      }
+    ]
+  }
+}

@@ -1,0 +1,141 @@
+{
+  "companyId": "00000000-0000-4000-8000-000000000002",
+  "agents": {
+    "active": 3,
+    "running": 3,
+    "paused": 0,
+    "error": 0
+  },
+  "tasks": {
+    "open": 14,
+    "inProgress": 2,
+    "blocked": 4,
+    "done": 28
+  },
+  "costs": {
+    "monthSpendCents": 0,
+    "monthBudgetCents": 0,
+    "monthUtilizationPercent": 0
+  },
+  "pendingApprovals": 0,
+  "budgets": {
+    "activeIncidents": 0,
+    "pendingApprovals": 0,
+    "pausedAgents": 0,
+    "pausedProjects": 0
+  },
+  "runActivity": [
+    {
+      "date": "2026-10-05",
+      "succeeded": 31,
+      "failed": 5,
+      "recovered": 0,
+      "other": 6,
+      "total": 42
+    },
+    {
+      "date": "2026-10-06",
+      "succeeded": 11,
+      "failed": 3,
+      "recovered": 4,
+      "other": 0,
+      "total": 18
+    },
+    {
+      "date": "2026-10-07",
+      "succeeded": 0,
+      "failed": 0,
+      "recovered": 0,
+      "other": 0,
+      "total": 0
+    },
+    {
+      "date": "2026-10-08",
+      "succeeded": 0,
+      "failed": 0,
+      "recovered": 0,
+      "other": 0,
+      "total": 0
+    },
+    {
+      "date": "2026-10-09",
+      "succeeded": 0,
+      "failed": 0,
+      "recovered": 0,
+      "other": 0,
+      "total": 0
+    },
+    {
+      "date": "2026-10-10",
+      "succeeded": 24,
+      "failed": 0,
+      "recovered": 0,
+      "other": 3,
+      "total": 27
+    },
+    {
+      "date": "2026-10-11",
+      "succeeded": 14,
+      "failed": 0,
+      "recovered": 1,
+      "other": 9,
+      "total": 24
+    },
+    {
+      "date": "2026-10-12",
+      "succeeded": 8,
+      "failed": 8,
+      "recovered": 2,
+      "other": 5,
+      "total": 23
+    },
+    {
+      "date": "2026-10-13",
+      "succeeded": 2,
+      "failed": 1,
+      "recovered": 0,
+      "other": 3,
+      "total": 6
+    },
+    {
+      "date": "2026-10-14",
+      "succeeded": 0,
+      "failed": 0,
+      "recovered": 0,
+      "other": 0,
+      "total": 0
+    },
+    {
+      "date": "2026-10-15",
+      "succeeded": 0,
+      "failed": 0,
+      "recovered": 0,
+      "other": 0,
+      "total": 0
+    },
+    {
+      "date": "2026-10-16",
+      "succeeded": 5,
+      "failed": 1,
+      "recovered": 0,
+      "other": 1,
+      "total": 7
+    },
+    {
+      "date": "2026-10-17",
+      "succeeded": 4,
+      "failed": 0,
+      "recovered": 0,
+      "other": 1,
+      "total": 5
+    },
+    {
+      "date": "2026-10-18",
+      "succeeded": 25,
+      "failed": 0,
+      "recovered": 0,
+      "other": 5,
+      "total": 30
+    }
+  ]
+}

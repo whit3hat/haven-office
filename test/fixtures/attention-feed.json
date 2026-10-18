@@ -1,0 +1,133 @@
+{
+  "companyId": "00000000-0000-4000-8000-000000000002",
+  "generatedAt": "2026-10-18T22:00:00.000Z",
+  "totalCount": 3,
+  "deskBadgeCount": 2,
+  "nextCursor": null,
+  "countsBySourceKind": {
+    "issue_thread_interaction": 1,
+    "approval": 1,
+    "failed_run": 1
+  },
+  "items": [
+    {
+      "id": "00000000-0000-4000-8000-000000000101",
+      "companyId": "00000000-0000-4000-8000-000000000002",
+      "sourceKind": "issue_thread_interaction",
+      "subject": {
+        "kind": "interaction",
+        "id": "00000000-0000-4000-8000-000000000102",
+        "companyId": "00000000-0000-4000-8000-000000000002",
+        "title": "Which native surface should Haven Office ship first?",
+        "identifier": null,
+        "status": "pending",
+        "href": "/HAV/issues/HAV-32"
+      },
+      "whyNow": "Pepper is waiting on a decision before Rhodey can start P2.",
+      "decisionVerbs": [
+        { "id": "accept", "label": "Accept", "description": "Confirm the menu-bar item." },
+        { "id": "reject", "label": "Request changes", "description": null }
+      ],
+      "inlineResolvable": true,
+      "dedupKey": "issue_thread_interaction:00000000-0000-4000-8000-000000000102",
+      "dismissalKey": "attention:00000000-0000-4000-8000-000000000101",
+      "dismissal": null,
+      "severity": "high",
+      "rank": 1,
+      "activityAt": "2026-10-18T21:40:00.000Z",
+      "createdAt": "2026-10-18T19:05:00.000Z",
+      "updatedAt": "2026-10-18T21:40:00.000Z",
+      "relatedIssue": {
+        "kind": "issue",
+        "id": "00000000-0000-4000-8000-000000000103",
+        "companyId": "00000000-0000-4000-8000-000000000002",
+        "title": "Research",
+        "identifier": "HAV-32",
+        "status": "in_progress",
+        "href": "/HAV/issues/HAV-32"
+      },
+      "project": {
+        "id": "00000000-0000-4000-8000-000000000104",
+        "name": "Haven Office",
+        "urlKey": "haven-office"
+      },
+      "queues": [{ "key": "decide", "title": "Decide" }],
+      "expiresAt": "2026-10-25T19:05:00.000Z",
+      "decideBy": "2026-10-19T19:05:00.000Z",
+      "snoozedUntil": null,
+      "originAgentName": "Pepper"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000105",
+      "companyId": "00000000-0000-4000-8000-000000000002",
+      "sourceKind": "approval",
+      "subject": {
+        "kind": "approval",
+        "id": "00000000-0000-4000-8000-000000000106",
+        "companyId": "00000000-0000-4000-8000-000000000002",
+        "title": "Approve an Apple Developer ID for signed releases",
+        "identifier": null,
+        "status": "pending",
+        "href": "/HAV/approvals/00000000-0000-4000-8000-000000000106"
+      },
+      "whyNow": "Unsigned builds show a Gatekeeper warning on first launch.",
+      "decisionVerbs": [
+        { "id": "approve", "label": "Approve", "description": null },
+        { "id": "deny", "label": "Deny", "description": null }
+      ],
+      "inlineResolvable": true,
+      "dedupKey": "approval:00000000-0000-4000-8000-000000000106",
+      "dismissalKey": "approval:00000000-0000-4000-8000-000000000106",
+      "dismissal": null,
+      "severity": "medium",
+      "rank": 2,
+      "activityAt": "2026-10-18T14:12:00.000Z",
+      "createdAt": "2026-10-17T09:00:00.000Z",
+      "updatedAt": "2026-10-18T14:12:00.000Z",
+      "relatedIssue": null,
+      "project": null,
+      "queues": [{ "key": "decide", "title": "Decide" }],
+      "expiresAt": null,
+      "decideBy": null,
+      "snoozedUntil": null,
+      "originAgentName": "Vision"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000107",
+      "companyId": "00000000-0000-4000-8000-000000000002",
+      "sourceKind": "failed_run",
+      "subject": {
+        "kind": "run",
+        "id": "00000000-0000-4000-8000-000000000108",
+        "companyId": "00000000-0000-4000-8000-000000000002",
+        "title": "Rhodey heartbeat failed",
+        "identifier": null,
+        "status": "failed",
+        "href": "/HAV/agents/rhodey/runs/00000000-0000-4000-8000-000000000108"
+      },
+      "whyNow": "Three consecutive heartbeats failed with the same exit code.",
+      "decisionVerbs": [],
+      "inlineResolvable": false,
+      "dedupKey": "failed_run:00000000-0000-4000-8000-000000000108",
+      "dismissalKey": "run:00000000-0000-4000-8000-000000000108",
+      "dismissal": {
+        "kind": "snooze",
+        "dismissedAt": "2026-10-18T10:00:00.000Z",
+        "snoozedUntil": "2026-10-19T10:00:00.000Z",
+        "isActive": true
+      },
+      "severity": "low",
+      "rank": 3,
+      "activityAt": "2026-10-18T09:55:00.000Z",
+      "createdAt": "2026-10-18T09:55:00.000Z",
+      "updatedAt": "2026-10-18T10:00:00.000Z",
+      "relatedIssue": null,
+      "project": null,
+      "queues": [{ "key": "watch", "title": "Watch" }],
+      "expiresAt": null,
+      "decideBy": null,
+      "snoozedUntil": "2026-10-19T10:00:00.000Z",
+      "originAgentName": "Rhodey"
+    }
+  ]
+}
