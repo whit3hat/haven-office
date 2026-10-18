@@ -375,15 +375,20 @@ server version is independent of this and is recorded in
 
 #### Not every tag is a release
 
-**`v2026.10.6` is the first and, as of 2026-10-18, only published release.** `v2026.10.0`
-through `v2026.10.5` are tags with **no release behind them**: each one is a `Release Desktop`
-run that failed in macOS packaging or verification, and the tag was pushed before the run
-proved itself. `GET /releases` returned `[]` for all six.
+As of 2026-10-18, **`v2026.10.6` and `v2026.10.7` are the only published releases.** Seven
+other tags have **no release behind them**:
 
-So **do not install from a tag** — a tag may have no assets at all. Install from the
+- `v2026.10.0` through `v2026.10.5` — each one a `Release Desktop` run that failed in macOS
+  packaging or verification, tagged before the run proved itself. What each failure was, and
+  the fix it produced, is in step 3 below.
+- `v2026.10.8` — superseded before it built. Its content shipped in `v2026.10.9`, and its
+  build was cancelled rather than spending another 45 minutes of macOS runner on a release
+  that would have been replaced within the hour.
+
+So **do not install from a tag** — a tag may have no assets at all, and the highest tag is
+usually not the newest *release*. Install from the
 [releases page](https://github.com/whit3hat/haven-office/releases), which only ever lists runs
-that packaged, verified and published. What each of those six failures was, and the fix it
-produced, is recorded in step 3 below.
+that packaged, verified and published.
 
 ### Steps
 
