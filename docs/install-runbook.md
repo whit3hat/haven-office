@@ -207,6 +207,17 @@ sign-out state.
 Once signed in, the window lands on `/HAV/office`. The **View** menu switches between
 **Office** and **Board**. The app remembers the last view per connection and reopens there.
 
+> **The office on a remote is the server's, not the app's.** On a remote connection every
+> page you see is served by that server, and `/HAV/office` exists only if the **server** has
+> the `paperclip-office` plugin installed. The copy bundled inside this app is installed into
+> **local mode only** — it is never pushed to a remote. Measured 2026-10-18: the lab server at
+> `paperclip.lab.havenco.xyz` does **not** have it. The server answers every path with the web
+> app shell (HTTP 200 — even `/HAV/definitely-not-a-page`) and the client-side router renders
+> **"Page not found"** for routes it does not know, so on that remote `Cmd+2` / the **Board**
+> work normally while `Cmd+1` / **Office** shows *Page not found*. That is a server-side
+> deployment gap, not a fault in this app or anything this runbook can fix; it resolves when
+> `paperclip-office` is installed on the server itself.
+
 > **HTTP is blocked by default.** If you ever point this at an `http://` URL, the app refuses
 > until you explicitly tick *"I understand the risk and want to allow this HTTP connection"*.
 > Do not do that for anything outside a local network.
@@ -250,9 +261,18 @@ to watch the window open. If any of the four below is wrong, say so on the issue
 > why `v2026.10.10` passed verification and shipped anyway. **Check rows 1–2 against
 > `v2026.10.12` or newer**; on anything older use **View → Board**.
 
+> **On the lab remote, rows 1–3 currently show "Page not found" on *every* build — including
+> `v2026.10.12`.** That is not an app defect and not an H3 regression: on a remote connection
+> the office page is served by the remote server, and the lab server does not have the
+> `paperclip-office` plugin installed (measured 2026-10-18; see the note in § 4b). The
+> navigation itself is working — `Cmd+1` lands exactly where it should, on a page the server
+> cannot serve yet. Until the plugin is installed server-side, confirm rows 1–3 in **local
+> mode** (§ 4a, `v2026.10.12` or newer), where the bundled plugin provides the office. Row 4
+> and the remote connection itself can be confirmed in either mode.
+
 | # | What to do | What should happen |
 |---|---|---|
-| 1 | Connect and sign in (§ 4b) | The window lands on **`/HAV/office`** — the office, not the issue board and not the dashboard root |
+| 1 | Start the app — local mode (§ 4a), or a remote whose server has the office plugin (see the note above) | The window lands on **`/HAV/office`** — the office, not the issue board and not the dashboard root |
 | 2 | Look at the office view | The office actually renders — rooms and desks, not a blank pane, a spinner that never resolves, or a 404 |
 | 3 | Press **`Cmd+1`**, then **`Cmd+2`** | `Cmd+1` → the office (`/HAV/office`); `Cmd+2` → the board (`/HAV/issues`). Both are also in the **View** menu, which is the thing to try if a shortcut is swallowed by the page |
 | 4 | Switch to **Board**, quit with `Cmd+Q`, reopen the app | It reopens on the **board**, not the office — the last view is remembered. Switch back to Office, quit, reopen, and it should come back on the office |
@@ -750,7 +770,8 @@ already installed it keeps it; publish a higher version to move them.
 | **"The application is damaged and can't be opened"** | Not the Gatekeeper warning — this one means the download is actually corrupt, or the app was modified after signing. Re-download the `.dmg`. |
 | **Wrong architecture** — app is very slow, or won't start | You installed the Intel `.dmg` on Apple Silicon or vice versa. Check About This Mac, delete the app, install the other one. |
 | **Local mode hangs on "Starting database"** | First launch initializes an embedded Postgres and is slow. If it is still stuck after ~5 minutes, check the server log (below). |
-| **The office page 404s** (local *or* remote) | **Always the case on `v2026.10.6`–`v2026.10.11`**, for two different reasons (§ 4c): `v2026.10.6`/`v2026.10.7` ship no plugins at all, and `v2026.10.10`/`v2026.10.11` ship the plugin but fail to install it (`ENOENT … scandir …/migrations`). **Install `v2026.10.12` or newer.** On any build, check the app log for `[plugins]`: `No bundled plugins found in …` means the `.app` was packaged without them, `could not be provisioned: … ENOENT … migrations` is the install bug fixed in `v2026.10.12`, any other `could not be provisioned` is a new failure worth reporting with the line quoted, and no `[plugins]` line at all means a build older than that logging. The app deliberately opens anyway rather than refusing to launch; use **View → Board** meanwhile. See [`local-mode-plugin.md`](local-mode-plugin.md). |
+| **"Page not found" on the office — remote connection** (`Cmd+1`; the Board and everything else work) | **Not the bundled plugin, and no app version fixes it.** On a remote, the office is served by the remote server, and the plugin bundled inside the app is installed into local mode only — it is never pushed to a remote. The connected server simply has no `paperclip-office` plugin; the lab server is in exactly this state as of 2026-10-18 (§ 4b). The fix is installing the plugin **on the server**. Use **View → Board** meanwhile, or local mode (§ 4a) to see the office. |
+| **The office page 404s — local mode** | **Always the case on `v2026.10.6`–`v2026.10.11`**, for two different reasons (§ 4c): `v2026.10.6`/`v2026.10.7` ship no plugins at all, and `v2026.10.10`/`v2026.10.11` ship the plugin but fail to install it (`ENOENT … scandir …/migrations`). **Install `v2026.10.12` or newer.** On any build, check the app log for `[plugins]`: `No bundled plugins found in …` means the `.app` was packaged without them, `could not be provisioned: … ENOENT … migrations` is the install bug fixed in `v2026.10.12`, any other `could not be provisioned` is a new failure worth reporting with the line quoted, and no `[plugins]` line at all means a build older than that logging. The app deliberately opens anyway rather than refusing to launch; use **View → Board** meanwhile. See [`local-mode-plugin.md`](local-mode-plugin.md). |
 | **Remote verification fails** | The app tells you which check failed — see [the table below](#remote-verification-messages) for what each message means. A private authenticated deployment redacting fields is fine and still verifies; a wrong host or an offline server is not. Confirm the URL works in a browser first. |
 | **Signed in on the web but not in the app** | Sessions are not shared with your browser. Sign in inside the app window. |
 | **No updates ever offered** | Check that the newest release has a `latest-mac.yml` asset and is not a draft or prerelease. |
