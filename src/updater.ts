@@ -5,13 +5,23 @@ import {
 import {
   app,
   dialog,
+  shell,
   BrowserWindow,
   type MessageBoxOptions,
   type MessageBoxReturnValue,
 } from "electron";
-import { existsSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import log from "electron-log";
+import {
+  canApplyUpdateInPlace,
+  describeSignatureKind,
+  detectMacSignatureKind,
+  macBundleRootFromExecutable,
+  releasesPageUrlFromFeed,
+  type CodesignOutput,
+} from "./updater-signing";
 
 const updaterLogger = {
   info: (...args: unknown[]) => log.info(...args),
@@ -39,6 +49,17 @@ let checkForUpdatesPromise: Promise<UpdateCheckResult | null> | null = null;
 let downloadUpdatePromise: Promise<Array<string>> | null = null;
 let downloadedVersion: string | null = null;
 let restartPromptVisible = false;
+let updateDeliveryPromise: Promise<UpdateDelivery> | null = null;
+let manualDownloadPromptedFor: string | null = null;
+
+/**
+ * How a new version reaches this install.
+ *
+ * `in-place` is Squirrel.Mac replacing the app; `manual` is the human
+ * downloading the `.dmg`, which is the only path an ad-hoc signed build has —
+ * see `updater-signing.ts` for why.
+ */
+type UpdateDelivery = "in-place" | "manual";
 
 /**
  * Call this once from the main process after the window is ready.
@@ -61,6 +82,10 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
   }
 
   ensureUpdaterInitialized();
+
+  // Warm the signing check so the log says which delivery path this install has
+  // before anyone needs to ask why an update did or did not install itself.
+  void resolveUpdateDelivery();
 
   if (scheduledChecksStarted) {
     return;
@@ -134,6 +159,12 @@ export async function checkForUpdatesFromMenu(preferredWindow?: BrowserWindow | 
         title: "You're Up to Date",
         message: `Haven Office v${app.getVersion()} is already the latest version.`,
       });
+      return;
+    }
+
+    if ((await resolveUpdateDelivery()) === "manual") {
+      manualDownloadPromptedFor = null;
+      await notifyManualDownload(result.updateInfo.version);
       return;
     }
 
@@ -240,8 +271,108 @@ function resolveDialogWindow(): BrowserWindow | undefined {
   return undefined;
 }
 
+function updateConfigPath(): string {
+  return path.join(process.resourcesPath, "app-update.yml");
+}
+
 function hasUpdateConfig(): boolean {
-  return existsSync(path.join(process.resourcesPath, "app-update.yml"));
+  return existsSync(updateConfigPath());
+}
+
+function readUpdateConfig(): string | null {
+  try {
+    return readFileSync(updateConfigPath(), "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function runCodesign(args: Array<string>): Promise<CodesignOutput> {
+  return new Promise((resolve, reject) => {
+    execFile("/usr/bin/codesign", args, { timeout: 30_000 }, (err, stdout, stderr) => {
+      // A non-zero exit is expected for an unsigned bundle and carries the
+      // reason on stderr, so it is classified rather than thrown. Only a
+      // codesign that could not run at all is an error.
+      if (err && typeof (err as { code?: unknown }).code !== "number") {
+        reject(err);
+        return;
+      }
+
+      resolve({
+        status: (err as { code?: number } | null)?.code ?? 0,
+        stdout,
+        stderr,
+      });
+    });
+  });
+}
+
+/**
+ * Decide once per launch whether an update can be applied in place.
+ *
+ * Deciding before anything is downloaded is the point: Squirrel rejects the
+ * bundle at install time, which is after the user has agreed to restart, so a
+ * build that cannot be updated in place must never offer to restart.
+ */
+function resolveUpdateDelivery(): Promise<UpdateDelivery> {
+  if (updateDeliveryPromise) {
+    return updateDeliveryPromise;
+  }
+
+  updateDeliveryPromise = (async (): Promise<UpdateDelivery> => {
+    if (process.platform !== "darwin") {
+      return "in-place";
+    }
+
+    const bundlePath = macBundleRootFromExecutable(app.getPath("exe"));
+    const kind = await detectMacSignatureKind(bundlePath, runCodesign);
+    const inPlace = canApplyUpdateInPlace(kind);
+
+    log.info(
+      `[updater] This build is ${describeSignatureKind(kind)}; updates will be ` +
+        `${inPlace ? "applied in place" : "downloaded manually (Squirrel.Mac cannot replace it)"}`,
+    );
+
+    if (!inPlace) {
+      // Otherwise electron-updater would hand a staged update to Squirrel at
+      // quit, where it fails with nobody watching.
+      autoUpdater.autoInstallOnAppQuit = false;
+    }
+
+    return inPlace ? "in-place" : "manual";
+  })();
+
+  return updateDeliveryPromise;
+}
+
+/**
+ * Tell the human a new version exists and where to get it, at most once per
+ * version per launch.
+ */
+async function notifyManualDownload(version: string): Promise<void> {
+  if (manualDownloadPromptedFor === version) {
+    return;
+  }
+
+  manualDownloadPromptedFor = version;
+
+  const { response } = await showDialog({
+    type: "info",
+    title: "Update Available",
+    message: `Haven Office v${version} is available.`,
+    detail:
+      "This build is not code-signed, so macOS cannot replace it in place — " +
+      "automatic updates are a Squirrel.Mac feature that requires a signed app.\n\n" +
+      "Download the new .dmg, drag Haven Office into Applications, and replace the " +
+      "existing copy. Your connections and sign-in are kept.",
+    buttons: ["Open Download Page", "Later"],
+    defaultId: 0,
+    cancelId: 1,
+  });
+
+  if (response === 0) {
+    await shell.openExternal(releasesPageUrlFromFeed(readUpdateConfig()));
+  }
 }
 
 async function showDialog(options: MessageBoxOptions): Promise<MessageBoxReturnValue> {
@@ -285,7 +416,16 @@ async function downloadUpdate(): Promise<void> {
 async function checkForUpdatesSilently(options: { downloadIfAvailable: boolean }): Promise<void> {
   try {
     const result = await runUpdateCheck();
-    if (options.downloadIfAvailable && result?.isUpdateAvailable && !downloadedVersion) {
+    if (!result?.isUpdateAvailable) {
+      return;
+    }
+
+    if ((await resolveUpdateDelivery()) === "manual") {
+      await notifyManualDownload(result.updateInfo.version);
+      return;
+    }
+
+    if (options.downloadIfAvailable && !downloadedVersion) {
       await downloadUpdate();
     }
   } catch (err) {

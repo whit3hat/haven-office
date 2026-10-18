@@ -223,9 +223,13 @@ Two notes on what is *not* a fault:
 The app checks `whit3hat/haven-office` GitHub Releases for a newer version **on launch and
 then every 4 hours**, and you can force a check from the menu (**Check for Updates…**).
 
-- It does **not** download silently in the background on a manual check — it asks first.
-- On a scheduled check it downloads automatically, then prompts you to restart.
-- Choosing *Later* keeps the update staged; it installs the next time you quit.
+> **On an unsigned build, updates do not install themselves. You download the new `.dmg`.**
+> This is not a bug in our pipeline and it is not configurable — see below.
+
+- The app tells you a new version exists and offers **Open Download Page**. Install it the
+  same way you installed the first one (part 3): drag it into Applications, replace the old
+  copy, right-click → **Open** once. Connections and sign-in are kept — they live in your
+  home directory, not in the app bundle.
 - The update feed is `latest-mac.yml`, published as an asset on each release. A release
   without that file is invisible to the updater; see part 7.
 - Before any release exists, update checks log a 404 and report "up to date". That is handled
@@ -233,10 +237,38 @@ then every 4 hours**, and you can force a check from the menu (**Check for Updat
 
 Updates are only checked in packaged builds — a `pnpm dev` run never updates itself.
 
-**An update inherits the signing state of the release it came from.** If the running app is
-unsigned and the new release is unsigned, the update applies without a Gatekeeper prompt
-(macOS already trusts the app you opened). The first *signed* release will replace the app
-with a signed one, which is strictly an improvement.
+### Why an unsigned build cannot update itself
+
+Electron's `autoUpdater` on macOS **is** Squirrel.Mac, and Electron 41's documentation says
+so outright: *"Your application must be signed for automatic updates on macOS. This is a
+requirement of Squirrel.Mac."*
+
+The mechanism is specific, which is why there is no way around it. Squirrel reads the
+**running** app's designated requirement (`SecCodeCopySelf` →
+`SecCodeCopyDesignatedRequirement`) and validates the downloaded bundle against it
+(`SecStaticCodeCheckValidityWithErrors`, in `Squirrel/SQRLCodeSignature.m`). An ad-hoc
+signature has no identity to anchor to, so its designated requirement is the literal
+code-directory hash of that one build — `designated => cdhash H"…"`. The next version has a
+different hash, so the requirement can never be satisfied.
+
+Left alone, that fails at the *worst* moment: after the download, after you click **Restart**.
+So the app checks its own signature at launch and takes the honest path instead. The log line
+says which it chose:
+
+```
+[updater] This build is ad-hoc signed (no code-signing identity); updates will be
+  downloaded manually (Squirrel.Mac cannot replace it)
+```
+
+Anything other than a real signing identity — ad-hoc, unsigned, or a signature the check
+could not read — takes the manual path, deliberately: a needless manual download is a far
+better failure than an install that dies at quit.
+
+**The first signed release fixes this on its own**, with no code change: the check then reads
+`designated => identifier … and anchor apple generic …`, logs *"signed with a code-signing
+identity"*, and in-place updates start working. Note that the *running* app is what decides,
+so the last unsigned version you install will still ask you to download the first signed one
+by hand.
 
 ---
 
@@ -534,6 +566,8 @@ already installed it keeps it; publish a higher version to move them.
 | **Remote verification fails** | The app tells you which check failed — see [the table below](#remote-verification-messages) for what each message means. A private authenticated deployment redacting fields is fine and still verifies; a wrong host or an offline server is not. Confirm the URL works in a browser first. |
 | **Signed in on the web but not in the app** | Sessions are not shared with your browser. Sign in inside the app window. |
 | **No updates ever offered** | Check that the newest release has a `latest-mac.yml` asset and is not a draft or prerelease. |
+| **An update was offered but never installed itself** | Expected on an unsigned build — part 5. Use **Open Download Page** and install the `.dmg`. |
+| **"Code signature at URL … did not pass validation"** at restart | Squirrel refusing to replace an ad-hoc signed app, from a build older than this check. Download the `.dmg` instead; part 5. |
 
 <a id="remote-verification-messages"></a>
 

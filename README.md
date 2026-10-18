@@ -32,7 +32,7 @@ havenCo and pointed at havenCo's releases.
 - 🖱 **One click to launch** — double-click the app and the bundled server starts automatically. No terminal, no `pnpm install`, no Node.js setup.
 - 🌐 **Remote connection mode** — connect the shell to verified upstream Paperclip remotes in authenticated mode, with saved connections and quick reconnects.
 - 📦 **Paperclip inside** — ships an unmodified build of the upstream Paperclip server and UI. What you get in the app is exactly what you'd get by cloning and running the main repo.
-- 🔄 **Auto-updates** — pulls new Haven Office releases automatically from [whit3hat/haven-office](https://github.com/whit3hat/haven-office) GitHub Releases.
+- 🔄 **Update checks** — watches [whit3hat/haven-office](https://github.com/whit3hat/haven-office) GitHub Releases for new versions. While builds are unsigned it tells you a new version exists and links the download; macOS only lets a *signed* app replace itself in place ([install runbook § 5](docs/install-runbook.md#5-auto-updates)).
 - 🖥 **Native menus, windowing, and system tray** — the Paperclip UI, but as a real desktop app.
 
 Under the hood, the app can either:
