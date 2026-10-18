@@ -237,6 +237,12 @@ then every 4 hours**, and you can force a check from the menu (**Check for Updat
 
 Updates are only checked in packaged builds — a `pnpm dev` run never updates itself.
 
+> **`v2026.10.8` and earlier do not know this about themselves.** They download the update and
+> prompt *"Restart now to apply the update?"*, and the install then fails inside Squirrel. If
+> you are on one of those, choose **Later**, or dismiss the failure and download the `.dmg`
+> instead. The check below ships from `v2026.10.9` on; the *running* app is what decides, so
+> it takes one manual install to get onto a build that asks properly.
+
 ### Why an unsigned build cannot update itself
 
 Electron's `autoUpdater` on macOS **is** Squirrel.Mac, and Electron 41's documentation says
