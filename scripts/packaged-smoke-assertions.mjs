@@ -144,8 +144,9 @@ export async function assertBundledPluginsInstalled({
       const reason = lastError ? `last error: ${lastError}` : `installed plugins: ${lastSeen}`;
       throw new Error(
         `Bundled plugins were not installed within ${timeoutMs}ms (${reason}). `
-          + "The packaged app opens anyway when provisioning fails, so this is the only "
-          + "automated check that the office view will not 404 — see docs/local-mode-plugin.md.",
+          + "The packaged app opens anyway when provisioning fails, so this is the closest "
+          + "automated proxy for the office view not 404ing — it proves the plugin installed, "
+          + "not that the route answers; nothing fetches it. See docs/local-mode-plugin.md.",
       );
     }
 

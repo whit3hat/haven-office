@@ -227,11 +227,30 @@ is a no-op even in an already-built bundle.
   directory, `verify-macos-release.mjs` fails a build that would publish without it, and
   provisioning now logs when it finds nothing. Full write-up in the runbook's § 7. The
   read-only-bundle install itself is still unproven — it has never been reached.
-- **A real spawned local server.** Native deps for the bundled server are not built on Linux
-  (`pnpm.onlyBuiltDependencies` lists only the darwin embedded-postgres packages), so no live
-  install request was made against a real server. The HTTP contract is covered by
-  `test/plugin-provisioning.test.mjs` against a fake fetch, and the authorization path was
-  read from the server's own `actorMiddleware`/`assertInstanceAdmin` source.
+- **A real spawned local server.** Attempted 2026-10-18 and it cannot be done from this
+  container — for a more specific reason than previously recorded here. The reason was *not*
+  that the native deps are absent: `build/server-bundle/linux-x64` does carry
+  `@embedded-postgres/linux-x64` with real `initdb`/`postgres`/`pg_ctl` binaries. They cannot
+  *execute* here. Replicating `startServer()` from `src/main.ts` (same argv, `PORT`,
+  `PAPERCLIP_HOME`, `PAPERCLIP_TEAMS_CATALOG_DIR`, `PAPERCLIP_MIGRATION_AUTO_APPLY`) gets as far
+  as:
+
+      Using embedded PostgreSQL because no DATABASE_URL set (port=54330)
+      Failed to initialize embedded PostgreSQL cluster ...: Postgres init script
+      exited with code 127
+
+  Exit 127 is the shell's "not found", and `ldd` on the bundled `initdb` names the cause:
+  `libpq.so.5 => not found` and `libicuuc.so.60 => not found`. So the bundled server needs
+  system libraries this container does not have, and installing them is not this agent's call.
+
+  The consequence worth knowing: **the office route itself is still never exercised by any
+  automated check.** The macOS smoke test asserts `paperclip-office` reaches `installed` in
+  `/api/plugins`, which is the closest proxy, but no job fetches `/{prefix}/office` and asserts
+  it answers. Closing that would need either a `DATABASE_URL` pointing at a real Postgres on a
+  Linux runner, or an HTTP assertion added to the macOS smoke test, where a server is already
+  running. The HTTP contract for the install itself is covered by
+  `test/plugin-provisioning.test.mjs` against a fake fetch, and the authorization path was read
+  from the server's own `actorMiddleware`/`assertInstanceAdmin` source.
 - **Whether the office renders well.** The plugin loads; how it looks needs a window.
 
 ## Rejected alternatives
