@@ -1875,6 +1875,19 @@ function mapVerificationResult(result) {
     };
   }
 
+  if (result.reason === "blocked_by_os") {
+    return {
+      success: false,
+      badgeClass: "unreachable",
+      badge: "Local network blocked",
+      title: "macOS blocked this connection",
+      detail,
+      meta: buildResultMeta(result),
+      actionLabel: "Continue to Sign-In",
+      saveLabel: "Connect & Save",
+    };
+  }
+
   if (result.reason === "tls_error") {
     return {
       success: false,

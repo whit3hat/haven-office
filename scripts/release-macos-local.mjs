@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { LOCAL_NETWORK_USAGE_DESCRIPTION, LOCAL_NETWORK_USAGE_KEY } from "./macos-info-plist.mjs";
 import { assertBundledPluginsPresent, bundledPluginVersions } from "./stage-plugins.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -428,6 +429,14 @@ export function buildStageConfig(arch, signingInfo) {
       ],
       gatekeeperAssess: false,
       notarize: false,
+      // Declares Local Network intent so macOS 15+ can list the app in
+      // Privacy & Security → Local Network. Without it the app is denied
+      // access to any private address and there is no row to grant — which is
+      // how a remote on 192.168.4.8 read as "Host unreachable" while curl in
+      // Terminal got HTTP 200 from the same Mac. See scripts/macos-info-plist.mjs.
+      extendInfo: {
+        [LOCAL_NETWORK_USAGE_KEY]: LOCAL_NETWORK_USAGE_DESCRIPTION,
+      },
       signIgnore: [
         "/Contents/Resources/app-server/.*",
       ],

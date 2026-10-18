@@ -4,6 +4,7 @@ import { basename, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 import { MACH_O_MAGICS, isSignableMachOCode, machOFiletypes } from "./macho.mjs";
+import { assertLocalNetworkUsageDescription } from "./macos-info-plist.mjs";
 import { assertBundledPluginsPresent } from "./stage-plugins.mjs";
 
 const outputDir = resolve(process.argv[2] || "release/local-macos");
@@ -273,6 +274,19 @@ function collectChecks(appPath) {
   if (serverRuntime) {
     checks.serverRuntime = [serverRuntime];
   }
+
+  // Remote mode is the point of this app, and every havenCo remote is on a
+  // private address. On macOS 15+ an app with no Local Network purpose string
+  // is denied those addresses and cannot even be listed for approval, so the
+  // only symptom is "Host unreachable" from an app sitting on a working
+  // network. Checked here because every other check passed on the build that
+  // shipped it.
+  const localNetworkUsage = assertLocalNetworkUsageDescription({ appPath });
+  checks.localNetworkUsage = [{
+    path: relative(localNetworkUsage.path),
+    key: localNetworkUsage.key,
+    value: localNetworkUsage.value,
+  }];
 
   // The office is the view the app opens on, and it only exists once its
   // plugin is installed. Provisioning is non-fatal by design and silently

@@ -499,6 +499,82 @@ test("the refusal hint names the port actually typed, not the scheme default", a
   assert.match(result.detail, /nothing is listening on port 8443/);
 });
 
+// macOS 15+ Local Network privacy. The owner's Mac returned HTTP 200 from
+// `curl https://paperclip.lab.havenco.xyz/api/health` while the app on the same
+// machine reported "Host unreachable" — Terminal holds its own Local Network
+// grant and the app held none. An OS denial is a permission toggle, not a
+// network repair, so it must not share a label with an unreachable host.
+test("an OS network denial is reported as blocked, not as an unreachable host", async () => {
+  for (const code of ["ERR_NETWORK_ACCESS_DENIED", "EPERM", "EACCES"]) {
+    const result = await preflightRemoteConnection({
+      remoteUrl: "https://paperclip.lab.havenco.xyz",
+      platform: "darwin",
+      fetchImpl: async () => {
+        throw undiciFetchFailure(`connect ${code} 192.168.4.8:443`, code);
+      },
+    });
+
+    assert.equal(result.reason, "blocked_by_os", `${code} should not classify as unreachable`);
+    assert.match(result.detail, /Privacy & Security → Local Network/);
+    assert.doesNotMatch(
+      result.detail,
+      /did not resolve|nothing is listening/,
+      `${code} should not name a network repair`,
+    );
+  }
+});
+
+test("an ambiguous unroutable failure on macOS names both causes, with the test that separates them", async () => {
+  // EHOSTUNREACH is what both a genuinely off-network Mac and a Local-Network
+  // denial look like from inside the process. Naming only the first is the
+  // wrong repair for someone already on the LAN, which is the owner's case.
+  const result = await preflightRemoteConnection({
+    remoteUrl: "https://paperclip.lab.havenco.xyz",
+    platform: "darwin",
+    fetchImpl: async () => {
+      throw undiciFetchFailure("connect EHOSTUNREACH 192.168.4.8:443", "EHOSTUNREACH");
+    },
+  });
+
+  assert.equal(result.reason, "unreachable");
+  assert.match(result.detail, /private address \(192\.168\.x\.x, 10\.x\.x\.x\)/);
+  assert.match(result.detail, /Privacy & Security → Local Network/);
+  assert.match(result.detail, /curl/);
+});
+
+test("the Local Network hint is macOS-only", async () => {
+  const result = await preflightRemoteConnection({
+    remoteUrl: "https://paperclip.lab.havenco.xyz",
+    platform: "win32",
+    fetchImpl: async () => {
+      throw undiciFetchFailure("connect EHOSTUNREACH 192.168.4.8:443", "EHOSTUNREACH");
+    },
+  });
+
+  assert.match(result.detail, /private address/);
+  assert.doesNotMatch(result.detail, /Local Network/);
+});
+
+test("a timed-out probe says so rather than reporting its own abort", async () => {
+  const result = await preflightRemoteConnection({
+    remoteUrl: "https://paperclip.lab.havenco.xyz",
+    platform: "darwin",
+    timeoutMs: 50,
+    fetchImpl: (url, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => {
+          reject(Object.assign(new Error("This operation was aborted"), { name: "AbortError" }));
+        });
+      }),
+  });
+
+  assert.equal(result.reason, "unreachable");
+  assert.doesNotMatch(result.detail, /operation was aborted/);
+  assert.match(result.detail, /No response within/);
+  // A hang is the other shape a Local Network denial takes.
+  assert.match(result.detail, /Privacy & Security → Local Network/);
+});
+
 test("an unrecognised transport code gets no invented hint", async () => {
   const result = await preflightRemoteConnection({
     remoteUrl: "https://paperclip.lab.havenco.xyz",

@@ -426,7 +426,11 @@ function deriveHealth(result: RemotePreflightResult): ConnectionHealth {
     return "unsupported";
   }
 
-  if (result.reason === "tls_error" || result.reason === "unreachable") {
+  if (
+    result.reason === "tls_error"
+    || result.reason === "unreachable"
+    || result.reason === "blocked_by_os"
+  ) {
     return "unreachable";
   }
 

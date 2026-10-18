@@ -158,6 +158,24 @@ This is the mode most of the team wants.
 > `paperclip.lab.havenco.xyz`, issuer `Let's Encrypt YE2`, expires 2027-01-02), so there is no
 > lab CA to install and TLS should never be the problem here.
 
+> **Prerequisite — macOS Local Network permission. `curl` working does not mean the app
+> can connect.** Since macOS 15 (Sequoia), an app that opens a connection to a
+> **private** address — which `192.168.4.8` is — is blocked until you grant it *Local
+> Network* access. Terminal already holds that grant, which is why the `curl` above can
+> return `200` on a Mac where the app still reports the host unreachable. That is the
+> single most confusing failure in this whole document, so check it **before** you
+> conclude anything is broken:
+>
+> **System Settings → Privacy & Security → Local Network → enable *Haven Office*.**
+>
+> macOS is supposed to ask the first time the app tries. Electron apps are widely
+> reported to miss that prompt, so the row may need enabling by hand, and in some cases
+> the app does not appear in the list at all until it has tried once — open it, attempt
+> **Verify Remote**, then look again. Builds **before `v2026.10.11`** declare no Local
+> Network purpose string at all and therefore **can never appear in that list**; on
+> macOS 15+ they cannot reach the lab remote by any means. Upgrade rather than fighting
+> it.
+
 1. Click the **Remote** tab, then **Connect to Remote**.
 2. In **Remote URL**, enter:
 
@@ -568,6 +586,48 @@ that packaged, verified and published.
    [`Smoke Packaged macOS Release` #3](https://github.com/whit3hat/haven-office/actions/runs/39147656576).
    The verifier check exists because the smoke test only runs *after* a release is published.
 
+   **The missing Local Network purpose string — the second defect that reached a user, and
+   the one no CI job could have caught.** Up to and including `v2026.10.10`, neither
+   electron-builder config set `mac.extendInfo`, so the packed `Info.plist` carried no
+   `NSLocalNetworkUsageDescription`.
+
+   Since macOS 15 (Sequoia) a GUI app is denied connections to **private** addresses until
+   the user grants it Local Network access, and an app that declares no purpose string
+   **never appears in System Settings → Privacy & Security → Local Network** — so there is
+   no row to enable and the denial is permanent. Every havenCo remote is on a private
+   address (`paperclip.lab.havenco.xyz` → `192.168.4.8`), so remote mode could not work on
+   macOS 15+ at all.
+
+   It presents as a network fault and is not one. The owner reported *"Host unreachable"*
+   from the app while `curl` against the same URL on the same Mac returned **HTTP 200**
+   (2026-10-18) — Terminal holds its own Local Network grant. There is no error code that
+   says "permission": Chromium raises `ERR_NETWORK_ACCESS_DENIED`, the BSD layer raises
+   `EPERM`/`EACCES` on `connect`, and a denial often just hangs until the probe's own
+   timeout. That `curl`-versus-app comparison is the only cheap discriminator, which is why
+   § 4b and § 8 both lead with it.
+
+   Fixed in `v2026.10.11`:
+
+   - `mac.extendInfo.NSLocalNetworkUsageDescription` in **both** configs — `buildStageConfig`
+     (the one that ships) and the root `electron-builder.yml`.
+     `test/macos-local-network.test.mjs` asserts the key is in the generated config on both
+     signing paths **and** that the two configs' purpose strings are byte-identical, since
+     two configs drifting apart is exactly what caused the plugins defect above.
+   - `verify-macos-release.mjs` reads the packed `Info.plist` and **fails the build** if the
+     key is absent or empty, reported under `localNetworkUsage`. A binary plist goes through
+     `plutil`; anything unparseable raises rather than passing vacuously.
+   - `preflight.ts` classifies a confirmed denial as the new `blocked_by_os` reason, badged
+     **Local network blocked** instead of *Host unreachable*, and the ambiguous
+     `EHOSTUNREACH`/timeout case now names **both** causes plus the `curl` test. Its previous
+     wording named only "get on the lab network or VPN", which was the wrong repair for
+     someone already on it.
+
+   Declaring the key is **necessary but not reliably sufficient**: Electron apps are widely
+   reported to miss the first-connection prompt because the responsible-process identity
+   resolves to the Electron framework rather than the app bundle. So the runbook documents
+   the manual toggle as the step, and the purpose string is what makes that toggle exist.
+   Nothing here needs an Apple credential and no entitlement is involved.
+
    The run does three things in order:
 
    - `build-mac` prints **signed** or **unsigned** to the run summary, builds both arches
@@ -643,7 +703,8 @@ use, so a pass here means the real connection can reach the host too.
 | **TLS validation failed** — *"self-signed certificate (DEPTH_ZERO_SELF_SIGNED_CERT)"*, *"certificate has expired"*, *"unable to verify the first certificate"* | The host answered, but macOS does not trust its certificate. | **Not expected against `paperclip.lab.havenco.xyz`** — that host serves a real Let's Encrypt certificate (measured 2026-10-18, see part 4b), so this message there means something is intercepting TLS. For a different lab host behind a private CA, install the CA in **Keychain Access → System → Certificates** and mark it trusted. The app uses the system trust store, so once Safari trusts the host, so does Haven Office. |
 | **Host unreachable** — *"getaddrinfo ENOTFOUND … (ENOTFOUND)"*, *"net::ERR_NAME_NOT_RESOLVED"* | **DNS.** The name never resolved on this Mac. This is the most likely cause for our own remote: the name exists only in the lab's internal DNS (part 4b). | Point the Mac at the lab resolvers `192.168.4.2` / `192.168.4.3`, or get on the VPN that hands them out. Check with `scutil --dns \| grep nameserver`. |
 | **Host unreachable** — *"connect ECONNREFUSED … (ECONNREFUSED)"* | The name resolved and the host answered, but nothing is listening on that port. | Check the port in the URL. `https://` with no port means 443. |
-| **Host unreachable** — *"net::ERR_CONNECTION_TIMED_OUT"*, *"ETIMEDOUT"*, *"EHOSTUNREACH"* | The name resolved but the address never answered — DNS is fine, routing is not. | `paperclip.lab.havenco.xyz` resolves to the **private** address `192.168.4.8`, so you must be on the lab LAN or VPN. A coffee-shop network will always time out here. |
+| **Local network blocked** — *"macOS blocked Haven Office from reaching …"*, *"(ERR_NETWORK_ACCESS_DENIED)"*, *"(EPERM)"*, *"(EACCES)"* | **Not a network fault.** macOS 15+ denied *this app* access to the local network. The remote is fine and `curl` in Terminal will prove it. | **System Settings → Privacy & Security → Local Network → enable Haven Office.** If it is not listed, quit and reopen the app, attempt Verify Remote once, then look again. See part 4b. |
+| **Host unreachable** — *"net::ERR_CONNECTION_TIMED_OUT"*, *"ETIMEDOUT"*, *"EHOSTUNREACH"*, *"No response within 8s"* | **Two unrelated causes, and the error cannot tell them apart:** either the address genuinely never answered, or macOS silently dropped the app's connection to it. | **Run the `curl` from part 4b first.** If it returns `200`, the network is fine and this is the Local Network permission — fix that, not your DNS. If it fails too, you are not on a network that can route to the private address `192.168.4.8`: get on the lab LAN or VPN. A coffee-shop network will always fail here. |
 | **Host reachable, not Paperclip** — *"…/api/health redirected (HTTP 302) to …"* | A gateway or SSO proxy is intercepting the probe. The app deliberately does **not** follow redirects while verifying, because the URL is untrusted at that point. | Point the connection at the Paperclip origin itself rather than a vanity or gateway URL. |
 | **Host reachable, not Paperclip** — *"…answered with "text/html" rather than JSON"* | Something is listening, but it is not a Paperclip server — often a default web-server landing page. | Check the port and hostname. |
 | **Remote not eligible** | The server is configured for loopback-only local use. | It needs reconfiguring to authenticated mode; that is a server-side change, not a client one. |
@@ -657,6 +718,14 @@ use, so a pass here means the real connection can reach the host too.
 > timeout, you are on a build older than `v2026.10.8`. From `v2026.10.8` the detail names which
 > of the three it was and what to check. On `v2026.10.6` and earlier the badge was also shown
 > for **TLS** failures, so it did not even mean what it said.
+>
+> **On any build before `v2026.10.11`, "Host unreachable" against a private address is
+> most likely the macOS Local Network permission, and on those builds it cannot be
+> granted** — they declare no `NSLocalNetworkUsageDescription`, so the app never appears
+> in System Settings → Privacy & Security → Local Network. No amount of DNS or VPN
+> troubleshooting fixes that. From `v2026.10.11` the app is listable, and a confirmed
+> denial is reported as **Local network blocked** rather than sharing a badge with a
+> network fault.
 
 **The server log** is the first place to look for anything local-mode related:
 

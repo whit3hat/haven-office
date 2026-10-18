@@ -16,6 +16,9 @@ export type BootstrapStatus = "ready" | "bootstrap_pending";
 export type RemotePreflightFailureReason =
   | "invalid_url"
   | "unreachable"
+  // The OS refused this app the network, which is not the same as the remote
+  // being unreachable: the repair is a permission toggle, not a network change.
+  | "blocked_by_os"
   | "tls_error"
   | "not_paperclip"
   | "unsupported_local_trusted"

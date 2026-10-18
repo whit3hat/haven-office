@@ -12,6 +12,12 @@ interface PreflightOptions {
   fetchImpl?: typeof fetch;
   localServerVersion?: string | null;
   timeoutMs?: number;
+  /**
+   * Which OS to describe a transport failure for. macOS gets the Local
+   * Network permission hint; injectable so the branch is testable off a Mac,
+   * which is the only kind of machine that builds this app's releases.
+   */
+  platform?: string;
 }
 
 interface HealthPayload {
@@ -37,6 +43,7 @@ interface ParsedHealthPayload {
 export async function preflightRemoteConnection(options: PreflightOptions): Promise<RemotePreflightResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? 8_000;
+  const platform = options.platform ?? process.platform;
 
   let normalized;
   try {
@@ -190,7 +197,7 @@ export async function preflightRemoteConnection(options: PreflightOptions): Prom
       origin: normalized.origin,
       insecureTransport: normalized.insecureTransport,
       reason: classifyFetchError(error),
-      detail: describeFetchError(error, normalized.origin),
+      detail: describeFetchError(error, normalized.origin, platform, timeoutMs),
       warning: normalized.warning,
     });
   }
@@ -406,9 +413,10 @@ function buildFailure(input: {
  * useless user-facing detail "fetch failed" and defeated the keyword matching
  * below, so every TLS rejection was reported as a plain unreachable host.
  */
-function unwrapErrorChain(error: unknown): { messages: string[]; codes: string[] } {
+function unwrapErrorChain(error: unknown): { messages: string[]; codes: string[]; names: string[] } {
   const messages: string[] = [];
   const codes: string[] = [];
+  const names: string[] = [];
   const seen = new Set<unknown>();
 
   let current: unknown = error;
@@ -424,6 +432,9 @@ function unwrapErrorChain(error: unknown): { messages: string[]; codes: string[]
       if (current.message) {
         messages.push(current.message);
       }
+      if (current.name) {
+        names.push(current.name);
+      }
       const code = (current as { code?: unknown }).code;
       if (typeof code === "string" && code) {
         codes.push(code);
@@ -438,7 +449,7 @@ function unwrapErrorChain(error: unknown): { messages: string[]; codes: string[]
     break;
   }
 
-  return { messages, codes };
+  return { messages, codes, names };
 }
 
 /**
@@ -475,6 +486,21 @@ const DNS_ERROR_CODES = [
 
 const REFUSED_ERROR_CODES = ["ECONNREFUSED", "ERR_CONNECTION_REFUSED"];
 
+/**
+ * macOS refused to let *this app* touch the local network.
+ *
+ * Since macOS 15 a GUI app needs an explicit Local Network grant to open a
+ * socket to a private address. The denial is not reported as a permission
+ * error: Chromium raises `ERR_NETWORK_ACCESS_DENIED`, and the BSD layer raises
+ * `EPERM`/`EACCES` on `connect`. Nothing in any of them says "permission", so
+ * without this mapping the app blames the network for an OS policy decision.
+ */
+const LOCAL_NETWORK_DENIED_ERROR_CODES = [
+  "ERR_NETWORK_ACCESS_DENIED",
+  "EPERM",
+  "EACCES",
+];
+
 const UNROUTABLE_ERROR_CODES = [
   "ETIMEDOUT",
   "EHOSTUNREACH",
@@ -484,6 +510,22 @@ const UNROUTABLE_ERROR_CODES = [
   "ERR_ADDRESS_UNREACHABLE",
   "ERR_INTERNET_DISCONNECTED",
 ];
+
+/**
+ * The one sentence that separates an OS denial from a real network problem.
+ *
+ * `EHOSTUNREACH` and a silent timeout are what a Local Network denial looks
+ * like from inside the process, and they are also what a genuinely
+ * unreachable host looks like. The app cannot tell the two apart from the
+ * error — but the user can, in one command, because Terminal holds its own
+ * grant. havenCo's report was exactly this: `curl` got HTTP 200 while the app
+ * on the same Mac at the same moment called the host unreachable.
+ */
+const LOCAL_NETWORK_PERMISSION_HINT =
+  "On macOS 15 and later, Haven Office also needs Local Network permission to reach a "
+  + "private address: open System Settings → Privacy & Security → Local Network and enable "
+  + "Haven Office. If `curl` to this URL works in Terminal but this check does not, that "
+  + "permission is the cause and the network is fine.";
 
 /**
  * Turn a transport error code into the one thing worth checking next.
@@ -496,7 +538,12 @@ const UNROUTABLE_ERROR_CODES = [
  * Mac using any other resolver gets `ENOTFOUND` and a Mac off the LAN gets a
  * timeout. Neither is a fault in the app or the server.
  */
-function describeTransportFailure(codes: string[], origin: string): string | null {
+function describeTransportFailure(
+  codes: string[],
+  names: string[],
+  origin: string,
+  platform: string,
+): string | null {
   let host: string;
   let port: string;
   try {
@@ -507,6 +554,17 @@ function describeTransportFailure(codes: string[], origin: string): string | nul
     return null;
   }
 
+  const isMac = platform === "darwin";
+
+  if (codes.some((code) => LOCAL_NETWORK_DENIED_ERROR_CODES.includes(code))) {
+    return isMac
+      ? `macOS blocked Haven Office from reaching ${host}. This is the Local Network privacy `
+        + "control, not a network fault: open System Settings → Privacy & Security → Local "
+        + "Network and enable Haven Office. If Haven Office is not listed, quit it, reopen it "
+        + "and try again so macOS can ask."
+      : `The operating system blocked Haven Office from reaching ${host}.`;
+  }
+
   if (codes.some((code) => DNS_ERROR_CODES.includes(code))) {
     return `The name "${host}" did not resolve on this Mac. A lab-internal name resolves only through the lab's own DNS servers, so check System Settings → Network → DNS, or that you are on the lab network or VPN.`;
   }
@@ -515,19 +573,43 @@ function describeTransportFailure(codes: string[], origin: string): string | nul
     return `${host} resolved and answered, but nothing is listening on port ${port}. Check the port in the URL.`;
   }
 
-  if (codes.some((code) => UNROUTABLE_ERROR_CODES.includes(code))) {
-    return `${host} resolved but never answered. If it resolves to a private address (192.168.x.x, 10.x.x.x) you have to be on the lab network or VPN to reach it.`;
+  // Deliberately not a single cause. A private address that never answers is
+  // either off-network or blocked by macOS for this app, the error is
+  // identical for both, and the previous wording named only the first — which
+  // is the wrong repair for someone already on the LAN.
+  const timedOut = names.includes("AbortError") || names.includes("TimeoutError");
+  if (timedOut || codes.some((code) => UNROUTABLE_ERROR_CODES.includes(code))) {
+    const base = timedOut
+      ? `${host} did not answer in time.`
+      : `${host} resolved but never answered.`;
+    const network =
+      " If it resolves to a private address (192.168.x.x, 10.x.x.x) you have to be on the lab"
+      + " network or VPN to reach it.";
+    return isMac ? `${base}${network} ${LOCAL_NETWORK_PERMISSION_HINT}` : `${base}${network}`;
   }
 
   return null;
 }
 
-function describeFetchError(error: unknown, origin?: string): string {
-  const { messages, codes } = unwrapErrorChain(error);
+function describeFetchError(
+  error: unknown,
+  origin: string | undefined,
+  platform: string,
+  timeoutMs: number,
+): string {
+  const { messages, codes, names } = unwrapErrorChain(error);
 
   // The outermost message is the generic wrapper; anything deeper is the real
   // diagnosis, so prefer the deepest one and keep the code alongside it.
-  const detail = messages.length > 1 ? messages[messages.length - 1] : messages[0];
+  let detail = messages.length > 1 ? messages[messages.length - 1] : messages[0];
+
+  // An aborted probe is our own timeout firing, and "This operation was
+  // aborted" describes our implementation rather than what happened to the
+  // user. Say the thing that is true of the remote.
+  if (names.includes("AbortError") || names.includes("TimeoutError")) {
+    detail = `No response within ${Math.round(timeoutMs / 1000)}s.`;
+  }
+
   if (!detail) {
     return "Remote preflight failed.";
   }
@@ -535,12 +617,19 @@ function describeFetchError(error: unknown, origin?: string): string {
   const code = codes.find((candidate) => !detail.includes(candidate));
   const described = code ? `${detail} (${code})` : detail;
 
-  const hint = origin ? describeTransportFailure(codes, origin) : null;
+  const hint = origin ? describeTransportFailure(codes, names, origin, platform) : null;
   return hint ? `${described} — ${hint}` : described;
 }
 
 function classifyFetchError(error: unknown): RemotePreflightResult["reason"] {
   const { messages, codes } = unwrapErrorChain(error);
+
+  // Checked before anything else: an OS denial is a different repair from
+  // every other failure here, and labelling it "Host unreachable" sends the
+  // user to look at a network that is working.
+  if (codes.some((code) => LOCAL_NETWORK_DENIED_ERROR_CODES.includes(code))) {
+    return "blocked_by_os";
+  }
 
   if (
     codes.some(

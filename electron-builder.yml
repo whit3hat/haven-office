@@ -80,6 +80,17 @@ mac:
   hardenedRuntime: true
   gatekeeperAssess: false
   notarize: false
+  # macOS 15+ denies a GUI app access to private-network addresses until the
+  # user grants Local Network, and an app can only be listed in Privacy &
+  # Security → Local Network if it declares a purpose string. Kept in step with
+  # buildStageConfig() in scripts/release-macos-local.mjs, which is the config
+  # that actually builds every published .dmg.
+  extendInfo:
+    NSLocalNetworkUsageDescription: >-
+      Haven Office connects to the Paperclip server you add as a remote
+      connection. Lab and self-hosted servers normally live on your local
+      network, so macOS requires this permission before Haven Office can reach
+      them.
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.inherit.plist
   signIgnore:
