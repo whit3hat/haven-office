@@ -123,12 +123,18 @@ Honest limits, because they matter for whoever builds P2:
 - The server-side requirements, the 403s and the Electron option semantics are
   **verified** — by live request, by reading the shipped server code, and from
   the shipped Electron type declarations respectively.
-- The end-to-end cookie round trip has **not been executed on a Mac**. The
-  build container this was written in has no GUI libraries, so the Electron
-  binary cannot start at all:
+- The cookie round trip has now been executed on a Mac **at the preflight
+  layer** (HAV-45, 2026-10-18): a signed-in partition preflighted as
+  `signed_in` and the window opened on the remembered view. So the mechanism —
+  `credentials: "include"` plus a `Cookie` header read from the partition jar —
+  is confirmed against real Chromium, not just against the type declarations.
+- The same round trip through `PaperclipClient.getMe()` has **not** been
+  executed on a Mac. The build container this was written in has no GUI
+  libraries, so the Electron binary cannot start at all:
   `error while loading shared libraries: libglib-2.0.so.0`. Everything that
-  does not need Electron was verified by running it; this one step could not
-  be.
+  does not need Electron was verified by running it; that one step could not
+  be. It uses the same transport shape, so the preflight result is strong
+  evidence for it but not a substitute.
 - What remains to confirm, in ten minutes on the owner's Mac, is in §4.
 
 ### Where the fallback credential lives
@@ -271,14 +277,21 @@ strategy swap, not a redesign. But it should be confirmed before a release:
    kinds are omitted or present as `0`.
 3. **`safeStorage` on a real Keychain.** Only needed if the fallback is ever
    used.
-4. **Preflight's session probe (HAV-45).** Same round trip, one layer down.
-   Connect to a remote you are signed in to and confirm the launcher says
-   "Opening verified remote…" rather than "Opening remote sign-in…", and that
-   the window opens on the remembered view instead of the server root. Then
-   point Verify Remote at a host that redirects `/api/health` and confirm it
-   still reports the redirect target, not an unreachable host — that is the one
-   interaction between the new `credentials: "include"` and the deliberate
-   `redirect: "manual"` handling that only Chromium can settle.
+4. ~~**Preflight's session probe (HAV-45).**~~ **Confirmed on the owner's Mac,
+   2026-10-18.** Connecting to a remote the owner was already signed in to
+   opened on the remembered view, not the server root — so the probe's cookies
+   reach Chromium and `preflightRemoteConnection` returns `signed_in`. The
+   cookie round trip in item 1 is the same mechanism one layer up, and this is
+   the first real-Chromium evidence for it.
+5. **The redirect interaction (HAV-47).** The half of HAV-45's Mac plan that
+   the signed-in connect does not exercise: point Verify Remote at a host that
+   redirects `/api/health` and confirm it still reports the redirect target,
+   not an unreachable host. That is the one interaction between
+   `credentials: "include"` and the deliberate `redirect: "manual"` handling in
+   `src/connection/manual-redirect-fetch.ts` that only Chromium can settle.
+   `test/partition-probe-fetch.test.mjs` asserts our half (a cookie-bearing
+   probe still resolves a declined redirect as a 3xx with its `Location`).
+   Bundle it into HAV-47's Verify Remote pass, which touches the same handler.
 
 ## 5. Module layout
 
