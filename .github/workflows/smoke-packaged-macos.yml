@@ -83,4 +83,17 @@ jobs:
           test "$host_arch" = "$expected_arch"
           app_path="$(find smoke-app -maxdepth 2 -type d -name '*.app' | head -n 1)"
           test -n "$app_path"
-          node scripts/smoke-test-packaged-macos.mjs --app "$app_path"
+          node scripts/smoke-test-packaged-macos.mjs --app "$app_path" \
+            --output-log "$GITHUB_WORKSPACE/smoke-app-output.log"
+
+      # Uploaded on success and failure alike. The v2026.10.10 plugin failure
+      # was diagnosable only from output the failure message had summarised
+      # away, and recovering it cost a code change and another dispatch.
+      - name: Upload packaged app output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-app-output-${{ github.event.inputs.arch }}-${{ github.event.inputs.tag }}
+          path: smoke-app-output.log
+          if-no-files-found: warn
+          retention-days: 14

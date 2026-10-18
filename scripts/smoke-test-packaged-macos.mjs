@@ -7,11 +7,15 @@ import os from "node:os";
 import path from "node:path";
 
 import { assertBundledPluginsInstalled } from "./packaged-smoke-assertions.mjs";
+import { formatFailureDetail } from "./smoke-output-diagnostics.mjs";
 import { bundledPluginVersions } from "./stage-plugins.mjs";
 
 const args = process.argv.slice(2);
 const appPath = takeOption("--app");
 const timeoutMs = Number.parseInt(takeOption("--timeout-ms") || "90000", 10);
+// Every byte the app wrote, kept whether or not the run passed. The failure
+// message quotes the lines that matter; this is for the ones nobody predicted.
+const outputLogPath = path.resolve(takeOption("--output-log") || "smoke-app-output.log");
 // Plugin provisioning starts only once the server is healthy and then installs
 // from a local path, so it gets its own budget rather than eating the startup
 // one. Separate numbers also keep the failure message honest about which half
@@ -47,6 +51,9 @@ try {
   console.log(`[smoke-macos] Isolated PAPERCLIP_HOME: ${paperclipHome}`);
 } finally {
   await stopChild();
+  // Before the temp tree goes: a failing run's most useful artifact is the
+  // output the failure message had to summarise.
+  writeOutputLog();
   if (!keepData) {
     rmSync(tempRoot, { recursive: true, force: true });
   } else {
@@ -273,8 +280,31 @@ async function stopChild() {
   }
 }
 
+/**
+ * The detail block appended to every failure.
+ *
+ * Was a bare 80-line tail, which is why the v2026.10.10 plugin failure reported
+ * that no plugin was installed without reporting the `[plugins]` line that said
+ * why: three minutes of per-request server logging had pushed it out of the
+ * window. See scripts/smoke-output-diagnostics.mjs.
+ */
 function tailOutput() {
-  return outputChunks.join("").split(/\r?\n/).slice(-80).join("\n");
+  return formatFailureDetail(outputChunks.join(""), { logPath: outputLogPath });
+}
+
+function writeOutputLog() {
+  const output = outputChunks.join("");
+  if (output.length === 0) {
+    return;
+  }
+
+  try {
+    writeFileSync(outputLogPath, output, "utf8");
+    console.log(`[smoke-macos] Full app output: ${outputLogPath}`);
+  } catch (error) {
+    // Never turn a reporting problem into the reported problem.
+    console.error(`[smoke-macos] Could not write ${outputLogPath}: ${error.message}`);
+  }
 }
 
 function fail(message) {
