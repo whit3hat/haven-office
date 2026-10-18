@@ -15,6 +15,8 @@ haven-office/
     preload.ts           Renderer preload — exposes updater IPC to the UI
     splash-preload.ts    Splash window preload — status update IPC
     updater.ts           Auto-updater — checks GitHub Releases every 4h
+    connection/          Connection profiles, remote preflight, window policy, start path
+    paperclip/           Typed Paperclip REST client, auth strategies, adaptive polling
   scripts/
     prepare-server.mjs   Installs @paperclipai/server from npm, bundles node_modules + Node binary
     build-ui.mjs         Clones upstream repo, builds the UI, copies dist into the server bundle
@@ -22,6 +24,7 @@ haven-office/
     after-pack.mjs       Repo-root macOS afterPack hook — requires real signing identity
     stage-after-pack.mjs Staged macOS afterPack hook — signs nested runtime binaries in app-server
     dev.mjs              Dev script — compiles TS and launches Electron
+    paperclip-attention.mjs  Worked example — reads an attention feed through src/paperclip/
   build/
     entitlements.mac.plist   macOS hardened runtime entitlements
     icon.png                 macOS/Linux app icon
@@ -38,6 +41,7 @@ haven-office/
 For the current macOS packaging flow, see `docs/development/macos-staged-release.md`.
 For the current release automation decision log, see `docs/development/release-automation-log.md`.
 For the repeatable operator checklist, see `docs/development/release-runbook.md`.
+For the Paperclip client, its auth model and the attention payload, see `docs/paperclip-data-layer.md`.
 
 ## How it works
 
@@ -256,6 +260,8 @@ This ensures tools like `claude` CLI are discoverable by the server.
 |---------|-------------|
 | `pnpm dev` | Compile TS + launch Electron (dev mode, no UI) |
 | `pnpm build` | Compile TypeScript only |
+| `pnpm test:connections` | Compile + run the connection/window/start-path suites |
+| `pnpm test:paperclip` | Compile + run the Paperclip client and polling suites |
 | `pnpm prepare-server` | Install server from npm + download Node binary |
 | `pnpm build-ui` | Clone upstream + build UI |
 | `pnpm pack` | Full build → packaged app in `release/` (unpacked) |
