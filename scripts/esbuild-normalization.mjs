@@ -1,4 +1,4 @@
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 
 function collectEsbuildBinaryTargets(rootDir, targets = []) {
@@ -40,6 +40,54 @@ function collectEsbuildBinaryTargets(rootDir, targets = []) {
   return targets;
 }
 
+// esbuild's postinstall runs on the *build host*, not the target. When we
+// cross-install (`npm install --cpu=x64` on an arm64 runner) it leaves two
+// host-arch artifacts behind: it overwrites `<pkg>/bin/esbuild`, which
+// normalizeDarwinEsbuildBinaries rewrites below, and it downloads a second copy
+// to `<pkg>/lib/downloaded-@esbuild-<host-platform>-esbuild`, which nothing used
+// to clean up. The latter is unreachable on the target — generateBinPath() keys
+// the lookup off the *running* platform, so an Intel Mac only ever resolves
+// `@esbuild/darwin-x64/bin/esbuild` (present) or a `downloaded-…-darwin-x64-…`
+// name that never matches the stray arm64 file. It is dead weight, but it is
+// still a Mach-O binary of the wrong arch inside the app, so
+// verify-macos-release's architecture check rejects the bundle.
+//
+// Prune it rather than rewriting it: the filename encodes the platform it is
+// for, so copying an x64 binary into a file named `…darwin-arm64…` would just be
+// a differently-shaped lie.
+function pruneForeignDownloadedEsbuildBinaries(packageDir, arch) {
+  const libDir = path.join(packageDir, "lib");
+  if (!existsSync(libDir)) return [];
+
+  const keep = `downloaded-@esbuild-darwin-${arch}-esbuild`;
+  const pruned = [];
+
+  for (const entry of readdirSync(libDir)) {
+    if (!entry.startsWith("downloaded-@esbuild-") || entry === keep) continue;
+    const full = path.join(libDir, entry);
+    rmSync(full, { force: true });
+    pruned.push(full);
+  }
+
+  return pruned;
+}
+
+// Only safe to prune once we know the target-arch package the runtime actually
+// resolves is really there. Each nested `esbuild` copy has its sibling
+// `@esbuild/<platform>` in the same `node_modules` directory, so this is a
+// direct check rather than a re-implementation of node resolution. Failing here
+// turns a silently-broken bundle into a build failure.
+function assertPlatformPackagePresent(packageDir, arch) {
+  const nodeModulesDir = path.dirname(packageDir);
+  const platformBinary = path.join(nodeModulesDir, "@esbuild", `darwin-${arch}`, "bin", "esbuild");
+  if (!existsSync(platformBinary)) {
+    throw new Error(
+      `Refusing to prune downloaded esbuild binaries: ${path.relative(nodeModulesDir, packageDir)} has no ` +
+      `sibling @esbuild/darwin-${arch} at ${platformBinary}. The packaged app would have no esbuild binary to load.`,
+    );
+  }
+}
+
 export function normalizeDarwinEsbuildBinaries({ bundleServerDir, arch, resolvePlatformBinary }) {
   if (arch !== "x64" && arch !== "arm64") {
     throw new Error(`Unsupported Darwin esbuild architecture '${arch}'.`);
@@ -59,6 +107,9 @@ export function normalizeDarwinEsbuildBinaries({ bundleServerDir, arch, resolveP
     }
 
     cpSync(sourceBinary, target.binaryPath);
+
+    assertPlatformPackagePresent(target.packageDir, arch);
+    target.prunedDownloads = pruneForeignDownloadedEsbuildBinaries(target.packageDir, arch);
   }
 
   return targets;

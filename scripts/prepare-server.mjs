@@ -313,6 +313,11 @@ for (const arch of targetArches) {
       console.log(
         `[prepare-server] Normalized ${path.relative(bundleServerDir, target.binaryPath)} for darwin-${arch}.`,
       );
+      for (const pruned of target.prunedDownloads ?? []) {
+        console.log(
+          `[prepare-server] Pruned host-arch esbuild download ${path.relative(bundleServerDir, pruned)}.`,
+        );
+      }
     }
   }
 

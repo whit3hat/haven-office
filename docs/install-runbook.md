@@ -379,6 +379,20 @@ server version is independent of this and is recorded in
    a future `@electron/osx-sign` bounds the walk upstream. Nothing to do by hand on CI or on
    your own Mac — `pnpm install` applies the patch.
 
+   **Cross-arch esbuild leftovers.** GitHub's `macos-latest` runners are Apple Silicon, so
+   building the **x64** bundle is a cross-install. esbuild's `postinstall` runs on the build
+   host rather than the target and leaves two host-arch artifacts behind: it overwrites
+   `<pkg>/bin/esbuild`, and it downloads a second copy to
+   `<pkg>/lib/downloaded-@esbuild-darwin-arm64-esbuild`. The first was already normalized; the
+   second was not, and [`Release Desktop` #4](https://github.com/whit3hat/haven-office/actions/runs/39081663700)
+   failed on it — `verify-macos-release.mjs` correctly refused an arm64 Mach-O binary inside
+   an x86_64 app. That file is unreachable on the target (esbuild resolves its binary by the
+   *running* platform, so an Intel Mac only ever loads `@esbuild/darwin-x64/bin/esbuild`), so
+   `scripts/esbuild-normalization.mjs` now prunes it — after asserting the target-arch package
+   is actually present, which turns a silently-broken bundle into a build failure. Look for
+   `[prepare-server] Pruned host-arch esbuild download` in the log. The verifier's
+   architecture check was deliberately **not** loosened.
+
    The run does three things in order:
 
    - `build-mac` prints **signed** or **unsigned** to the run summary, builds both arches
