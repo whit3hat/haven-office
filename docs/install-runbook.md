@@ -355,14 +355,29 @@ server version is independent of this and is recorded in
    build up front with that explanation if something ever runs it on npm 10. If you build on
    your own Mac, `npm install -g npm@11` first.
 
-   Packaging also **needs more than macOS's default 256 open files.** electron-builder reads
-   the whole staged tree in parallel to write the `.dmg` and the updater `.zip`, and a bundle
-   carrying embedded Postgres plus the agent SDKs exhausts that limit — the failure is
-   `EMFILE: too many open files`, and it lands *after* signing succeeds, which makes it look
-   like a signing problem. `release-macos-local.mjs` spawns electron-builder through a shell
-   that raises the soft limit first (highest the hard limit allows, down to 2048), and prints
-   the limit it got. Nothing to do by hand, on CI or on your own Mac; the printed line is
-   where to look if `EMFILE` ever returns.
+   Packaging also hits `EMFILE: too many open files`, for **two separate reasons**. Both are
+   fixed; this is recorded because the error lands *after* signing logs a success line, which
+   makes it read as a signing problem, and it is not.
+
+   The first is macOS's default soft limit of 256 open files. `release-macos-local.mjs` spawns
+   electron-builder through a shell that raises the soft limit first (highest the hard limit
+   allows, down to 2048) and prints what it got — look for
+   `[release-local] file descriptor soft limit:` in the log.
+
+   Raising the limit alone is **not** enough, which [`Release Desktop` #3](https://github.com/whit3hat/haven-office/actions/runs/39079436117)
+   proved by failing at 65536. The real cause is in the signer: `@electron/osx-sign`'s
+   `walkAsync()` recurses the whole `.app` with an unbounded `Promise.all` and opens every
+   regular file to sniff its Mach-O header, so it holds **one descriptor per file in the
+   bundle, all at once**. Haven Office stages 83,897 files in the server bundle alone, so no
+   achievable limit is sufficient. `signIgnore` cannot help — `dist/cjs/sign.js` walks first
+   and filters afterwards.
+
+   So `patches/@electron__osx-sign@1.3.3.patch` (a `pnpm.patchedDependencies` entry) bounds
+   the concurrent sniffs to 32. Measured on Linux over 2,880 files: unpatched peaks at 2,880
+   open descriptors, patched at exactly 32. `test/osx-sign-walk-patch.test.mjs` asserts both
+   numbers, so the patch cannot silently stop applying, and it tells you to drop the patch if
+   a future `@electron/osx-sign` bounds the walk upstream. Nothing to do by hand on CI or on
+   your own Mac — `pnpm install` applies the patch.
 
    The run does three things in order:
 

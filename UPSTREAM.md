@@ -26,6 +26,21 @@ git pull upstream master     # or: git rebase upstream/master
   `release.yml` takes a `ref`; `smoke-packaged-macos.yml` and `notarize-*.yml` take a
   release `tag`.
 
+### Patched dependencies
+
+We carry one dependency patch, in `patches/`, wired up through
+`pnpm.patchedDependencies`. Patches are the most fragile thing in a downstream repo —
+they fail loudly on a version bump — so each one gets a reason and an exit condition here.
+
+- **`@electron/osx-sign@1.3.3`** — bounds `walkAsync()`'s concurrent file-header sniffs to
+  32. Unpatched it fans out over the entire `.app` with an unbounded `Promise.all`, holding
+  one descriptor per file, which exceeds any `RLIMIT_NOFILE` on a bundle our size (83,897
+  files) and fails the signing step with `EMFILE`. `signIgnore` does not help: the walk
+  happens before the filter.
+  **Drop it when** a release of `@electron/osx-sign` bounds the walk upstream;
+  `test/osx-sign-walk-patch.test.mjs` fails and says so when that happens. Background in
+  [`docs/install-runbook.md`](docs/install-runbook.md) § 7.
+
 ## Why this repo exists
 
 The window in `paperclip-desktop` *is* the Paperclip web app, so any plugin installed on

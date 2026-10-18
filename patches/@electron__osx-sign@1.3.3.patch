@@ -1,0 +1,102 @@
+diff --git a/dist/cjs/util.js b/dist/cjs/util.js
+index 77e64b56872bc65bcb0f60ecfbec84eb3da02c6f..177f81b7bea7c059c6eed2f27e941c0f93369b15 100644
+--- a/dist/cjs/util.js
++++ b/dist/cjs/util.js
+@@ -101,11 +101,43 @@ exports.detectElectronPlatform = detectElectronPlatform;
+ /**
+  * This function returns a promise resolving the file path if file binary.
+  */
++// havenCo downstream patch — see patches/@electron__osx-sign@1.3.3.patch.
++// walkAsync() fans out over every entry in the .app with an unbounded
++// Promise.all, and this function opens each regular file to sniff its Mach-O
++// header. Haven Office embeds a full server runtime (83,897 files in
++// build/server-bundle alone), so the fan-out exceeds any RLIMIT_NOFILE and the
++// signing step dies with EMFILE. opts.signIgnore cannot help: sign.js applies
++// it after the walk has already opened everything. Bound the concurrent sniffs.
++// Only this leaf is gated, never the recursion, so it cannot deadlock.
++const MAX_CONCURRENT_BINARY_SNIFFS = 32;
++let activeBinarySniffs = 0;
++const waitingBinarySniffs = [];
++async function acquireBinarySniffSlot() {
++    if (activeBinarySniffs < MAX_CONCURRENT_BINARY_SNIFFS) {
++        activeBinarySniffs += 1;
++        return;
++    }
++    await new Promise(resolve => waitingBinarySniffs.push(resolve));
++    activeBinarySniffs += 1;
++}
++function releaseBinarySniffSlot() {
++    activeBinarySniffs -= 1;
++    const next = waitingBinarySniffs.shift();
++    if (next !== undefined) {
++        next();
++    }
++}
+ async function getFilePathIfBinary(filePath) {
+-    if (await (0, isbinaryfile_1.isBinaryFile)(filePath)) {
+-        return filePath;
++    await acquireBinarySniffSlot();
++    try {
++        if (await (0, isbinaryfile_1.isBinaryFile)(filePath)) {
++            return filePath;
++        }
++        return null;
++    }
++    finally {
++        releaseBinarySniffSlot();
+     }
+-    return null;
+ }
+ /**
+  * This function returns a promise validating opts.app, the application to be signed or flattened.
+diff --git a/dist/esm/util.js b/dist/esm/util.js
+index d3f66d54b1a88e7410d78affe17de87302db02a3..a2c6aeeeaffa1bf62b9cc3f3cb0cb303d05a7a2c 100644
+--- a/dist/esm/util.js
++++ b/dist/esm/util.js
+@@ -67,11 +67,43 @@ export async function detectElectronPlatform(opts) {
+ /**
+  * This function returns a promise resolving the file path if file binary.
+  */
++// havenCo downstream patch — see patches/@electron__osx-sign@1.3.3.patch.
++// walkAsync() fans out over every entry in the .app with an unbounded
++// Promise.all, and this function opens each regular file to sniff its Mach-O
++// header. Haven Office embeds a full server runtime (83,897 files in
++// build/server-bundle alone), so the fan-out exceeds any RLIMIT_NOFILE and the
++// signing step dies with EMFILE. opts.signIgnore cannot help: sign.js applies
++// it after the walk has already opened everything. Bound the concurrent sniffs.
++// Only this leaf is gated, never the recursion, so it cannot deadlock.
++const MAX_CONCURRENT_BINARY_SNIFFS = 32;
++let activeBinarySniffs = 0;
++const waitingBinarySniffs = [];
++async function acquireBinarySniffSlot() {
++    if (activeBinarySniffs < MAX_CONCURRENT_BINARY_SNIFFS) {
++        activeBinarySniffs += 1;
++        return;
++    }
++    await new Promise(resolve => waitingBinarySniffs.push(resolve));
++    activeBinarySniffs += 1;
++}
++function releaseBinarySniffSlot() {
++    activeBinarySniffs -= 1;
++    const next = waitingBinarySniffs.shift();
++    if (next !== undefined) {
++        next();
++    }
++}
+ async function getFilePathIfBinary(filePath) {
+-    if (await isBinaryFile(filePath)) {
+-        return filePath;
++    await acquireBinarySniffSlot();
++    try {
++        if (await isBinaryFile(filePath)) {
++            return filePath;
++        }
++        return null;
++    }
++    finally {
++        releaseBinarySniffSlot();
+     }
+-    return null;
+ }
+ /**
+  * This function returns a promise validating opts.app, the application to be signed or flattened.
