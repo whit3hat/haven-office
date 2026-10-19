@@ -226,7 +226,12 @@ Once signed in, the window lands on `/HAV/office`. The **View** menu switches be
 
 The office-first start path has unit tests but has never been seen running: no agent on this
 project has a Mac or a display, so the first person to install the `.dmg` is the first person
-to watch the window open. If any of the four below is wrong, say so on the issue.
+to watch the window open. If any of the seven below is wrong, say so on the issue.
+
+> **Install `v2026.10.13` or newer for the whole card.** Rows 5–7 are the menu-bar surface,
+> which first ships in `v2026.10.13`; on any older build there is no menu-bar item to find and
+> rows 5–7 are not applicable rather than failing. Rows 1–4 need `v2026.10.12` or newer, for
+> the two separate reasons below.
 
 > **Known broken in `v2026.10.6` and `v2026.10.7`: rows 1 and 2 will fail.** Those builds
 > shipped with **no bundled plugins at all**, so there is no office to land on and the view
