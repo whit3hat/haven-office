@@ -6,7 +6,11 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
-import { assertBundledPluginsInstalled } from "./packaged-smoke-assertions.mjs";
+import {
+  assertBundledPluginsInstalled,
+  assertTrayAssetsStaged,
+  assertTrayReady,
+} from "./packaged-smoke-assertions.mjs";
 import { formatFailureDetail } from "./smoke-output-diagnostics.mjs";
 import { bundledPluginVersions } from "./stage-plugins.mjs";
 
@@ -21,6 +25,11 @@ const outputLogPath = path.resolve(takeOption("--output-log") || "smoke-app-outp
 // one. Separate numbers also keep the failure message honest about which half
 // ran out of time.
 const pluginTimeoutMs = Number.parseInt(takeOption("--plugin-timeout-ms") || "180000", 10);
+// The tray is built on the connection-boot path, so its line arrives after the
+// server is healthy. Its own budget, for the same reason plugin provisioning
+// has one: a shared number makes the failure message lie about which half ran
+// out of time.
+const trayTimeoutMs = Number.parseInt(takeOption("--tray-timeout-ms") || "60000", 10);
 const keepData = hasFlag("--keep-data");
 
 if (!appPath) {
@@ -30,6 +39,15 @@ if (!appPath) {
 const executablePath = resolveExecutable(appPath);
 if (!existsSync(executablePath)) {
   fail(`Packaged executable does not exist: ${executablePath}`);
+}
+
+// Before spending a runner on launching the app: a bundle check needs nothing
+// running, and a missing menu-bar icon is cheaper to report here than to infer
+// from an app that started normally and showed nothing.
+try {
+  assertTrayAssetsStaged({ appPath });
+} catch (error) {
+  fail(error.message);
 }
 
 const tempRoot = mkdtempSync(path.join(os.tmpdir(), "paperclip-packaged-smoke-"));
@@ -184,6 +202,14 @@ async function verifyServerEndpoints(url) {
   await requestOk(`${url}/get-session`);
   await requestNonEmptyJsonArray(`${url}/api/skills/catalog`);
   await requestNonEmptyJsonArray(`${url}/api/teams/catalog`);
+
+  // The menu-bar item is built once the connection boots, which is the first
+  // point at which the app has an origin to poll. Checked before the plugin
+  // wait because it resolves in seconds and its failure is unambiguous.
+  await assertTrayReady({
+    readOutput: () => outputChunks.join(""),
+    timeoutMs: trayTimeoutMs,
+  });
 
   // The office is the view the app opens on, and it 404s unless the bundled
   // plugin was installed into this profile. Provisioning is deliberately

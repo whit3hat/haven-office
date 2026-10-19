@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { spawnSync } from "node:child_process";
 
+import { TRAY_TEMPLATE_ASSETS } from "../scripts/packaged-smoke-assertions.mjs";
 import { buildStageConfig, resolveMacSigningIdentity, withRaisedFileLimit } from "../scripts/release-macos-local.mjs";
 
 const NO_IDENTITIES = () => [];
@@ -124,6 +125,28 @@ test("the staged config ships the bundled plugins, on both signing paths", () =>
       config.extraResources.find((entry) => entry.to === "app-server/plugins"),
       { from: "app-server/plugins", to: "app-server/plugins", filter: ["**/*"] },
     );
+  }
+});
+
+test("the staged config ships the menu-bar template icon, on both signing paths", () => {
+  // Found the same way as the plugins entry above, one release later: the
+  // repo-level electron-builder.yml stages both tray files, this generated
+  // config did not, and `new Tray(nativeImage.createFromPath(missing))`
+  // succeeds and draws nothing. HAV-43 landed the tray; without this entry
+  // every published .dmg would have had an invisible menu-bar item.
+  for (const signing of [
+    { name: "Developer ID Application: havenCo (ABCDE12345)", teamId: "ABCDE12345", adhoc: false },
+    { name: null, teamId: null, adhoc: true },
+  ]) {
+    const config = buildStageConfig("arm64", signing);
+
+    for (const name of TRAY_TEMPLATE_ASSETS) {
+      assert.deepEqual(
+        config.extraResources.find((entry) => entry.to === name),
+        { from: `build/${name}`, to: name },
+        `no ${name} at the resources root in ${JSON.stringify(config.extraResources.map((e) => e.to))}`,
+      );
+    }
   }
 });
 

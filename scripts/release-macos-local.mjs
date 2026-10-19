@@ -19,6 +19,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { LOCAL_NETWORK_USAGE_DESCRIPTION, LOCAL_NETWORK_USAGE_KEY } from "./macos-info-plist.mjs";
+import { TRAY_TEMPLATE_ASSETS } from "./packaged-smoke-assertions.mjs";
 import { assertBundledPluginsPresent, bundledPluginVersions } from "./stage-plugins.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -407,6 +408,14 @@ export function buildStageConfig(arch, signingInfo) {
               filter: ["**/*"],
             },
           ]),
+      // The menu-bar template icon, at the resources root rather than under
+      // app-server, which is where src/main.ts's trayIconPath() looks for it.
+      // Same omission as the plugins entry above and for the same reason: the
+      // repo-level electron-builder.yml stages these, but this generated config
+      // is what builds every published .dmg. Without them the Tray is built
+      // from an empty NativeImage — a menu-bar item that exists and draws
+      // nothing, reporting no error anywhere.
+      ...TRAY_TEMPLATE_ASSETS.map((name) => ({ from: `build/${name}`, to: name })),
     ],
     publish: {
       provider: "github",
@@ -518,6 +527,13 @@ function stageRuntimeFiles(stageAppDir, arch, stageRoot) {
 
   ensureDir(buildResourcesDir);
   cpSync(join(projectRoot, "build", "icon.png"), join(buildResourcesDir, "icon.png"));
+  // The tray's template image. buildStageConfig() stages these out of the
+  // stage's own `build/` directory, so copying them is not optional.
+  for (const name of TRAY_TEMPLATE_ASSETS) {
+    const source = join(projectRoot, "build", name);
+    assertExists(source, `Menu-bar template icon build/${name}`);
+    cpSync(source, join(buildResourcesDir, name));
+  }
   cpSync(join(projectRoot, "build", "entitlements.mac.plist"), join(buildResourcesDir, "entitlements.mac.plist"));
   cpSync(
     join(projectRoot, "build", "entitlements.mac.inherit.plist"),

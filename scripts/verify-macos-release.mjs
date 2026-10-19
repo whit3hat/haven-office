@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 
 import { MACH_O_MAGICS, isSignableMachOCode, machOFiletypes } from "./macho.mjs";
 import { assertLocalNetworkUsageDescription } from "./macos-info-plist.mjs";
+import { TRAY_TEMPLATE_ASSETS, assertTrayAssetsStaged } from "./packaged-smoke-assertions.mjs";
 import { assertBundledPluginsPresent } from "./stage-plugins.mjs";
 
 const outputDir = resolve(process.argv[2] || "release/local-macos");
@@ -305,6 +306,18 @@ function collectChecks(appPath) {
       entrypoints: plugin.entrypoints,
     }));
   }
+
+  // The menu-bar template icon. Third instance of the same pattern: something
+  // the source references, staged by the repo-level electron-builder.yml, that
+  // the generated staged config did not copy — found by writing this check,
+  // not by a build failing. nativeImage returns an empty image for a missing
+  // file instead of throwing, so the app ships a menu-bar item nobody can see.
+  const trayAssets = assertTrayAssetsStaged({ appPath, log: () => {} });
+  checks.trayTemplateIcon = TRAY_TEMPLATE_ASSETS.map((name) => ({
+    path: relative(join(appPath, "Contents", "Resources", name)),
+    width: trayAssets[name].width,
+    height: trayAssets[name].height,
+  }));
 
   return checks;
 }

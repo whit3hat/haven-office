@@ -311,6 +311,49 @@ discover by opening the menu bar on a Mac. On a repo whose only real install tar
 human with a Mac and a Gatekeeper right-click, that difference is most of the iteration speed
 you have.
 
+#### If your surface needs a file in the bundle, stage it in *two* configs
+
+**The single most expensive mistake available in this repo.** There are two electron-builder
+configurations and only one of them builds anything you publish:
+
+| | |
+| --- | --- |
+| [`electron-builder.yml`](../electron-builder.yml) | the repo-level config. Upstream's shape, kept for rebase cost. Used by `pnpm pack` / `pnpm dist` / `dist:win` / `dist:linux` |
+| `buildStageConfig()` in [`scripts/release-macos-local.mjs`](../scripts/release-macos-local.mjs) | **generated at build time, and the config behind every published `.dmg`** (`pnpm release:mac:local`, which is what the `Release Desktop` workflow runs) |
+
+Adding an `extraResources` entry to the YAML alone therefore produces an asset that is present
+in local `--dir` builds, present in the source, and **absent from every release**. For a
+macOS-only product that is indistinguishable from working until someone installs a `.dmg`.
+
+This has now happened twice, and the pattern is identical both times:
+
+- the bundled office plugin — `v2026.10.6` and `v2026.10.7` shipped with no plugins at all;
+- the tray's template icon — caught in `v2026.10.13` only because the smoke assertion was
+  written before the release was cut.
+
+Both are silent at runtime by construction: plugin provisioning treats an absent directory as
+"nothing to install", and `nativeImage.createFromPath()` returns an *empty* image for a missing
+file rather than throwing, so `new Tray(image)` succeeds and renders nothing.
+
+So for any new bundled asset, do all four:
+
+1. **`electron-builder.yml`** — the `extraResources` entry.
+2. **`buildStageConfig()`** — the matching entry, *and* copy the file into the stage in
+   `stageRuntimeFiles()`, since that config's paths are relative to the staging directory
+   rather than the repo.
+3. **[`scripts/verify-macos-release.mjs`](../scripts/verify-macos-release.mjs)** — assert it is
+   inside the packed `.app`. This runs before publishing, which makes it the check that
+   actually saves you.
+4. **[`scripts/packaged-smoke-assertions.mjs`](../scripts/packaged-smoke-assertions.mjs)** —
+   assert the running app can *use* it. Steps 3 and 4 fail for different reasons: a staged
+   asset with its wiring never called is still a dead surface.
+
+Steps 3 and 4 are plain `.mjs` with injectable clocks and IO so they run under
+`pnpm test:release-safety` on Linux. Note that the smoke workflow runs `scripts/` straight
+from a checkout with **no install and no build**, so nothing there may import from `dist/` —
+which is why the one string shared with `src/` (`TRAY_READY_PREFIX`) is duplicated and guarded
+by a test rather than imported.
+
 ---
 
 ## Related documents

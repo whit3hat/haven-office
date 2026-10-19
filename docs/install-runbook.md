@@ -222,7 +222,7 @@ Once signed in, the window lands on `/HAV/office`. The **View** menu switches be
 > until you explicitly tick *"I understand the risk and want to allow this HTTP connection"*.
 > Do not do that for anything outside a local network.
 
-### 4c. The first-launch check — please confirm these four things
+### 4c. The first-launch check — please confirm these seven things
 
 The office-first start path has unit tests but has never been seen running: no agent on this
 project has a Mac or a display, so the first person to install the `.dmg` is the first person
@@ -276,6 +276,17 @@ to watch the window open. If any of the four below is wrong, say so on the issue
 | 2 | Look at the office view | The office actually renders — rooms and desks, not a blank pane, a spinner that never resolves, or a 404 |
 | 3 | Press **`Cmd+1`**, then **`Cmd+2`** | `Cmd+1` → the office (`/HAV/office`); `Cmd+2` → the board (`/HAV/issues`). Both are also in the **View** menu, which is the thing to try if a shortcut is swallowed by the page |
 | 4 | Switch to **Board**, quit with `Cmd+Q`, reopen the app | It reopens on the **board**, not the office — the last view is remembered. Switch back to Office, quit, reopen, and it should come back on the office |
+| 5 | Look at the **menu bar**, top right, once the window has opened | A small monochrome icon is there, and clicking it opens a menu. If there is a number next to the icon it should match what the board says needs attention — see § 4d |
+| 6 | **The notification prompt.** Expect macOS to ask *"“Haven Office” Would Like to Send You Notifications"* at some point during the first launch | Choose **Allow**. If you chose *Don't Allow* — or never saw the prompt — that is recoverable and § 4d says how. Tell us which happened either way; a prompt that never appears is itself a finding |
+| 7 | Open the menu-bar menu and click one of the items listed at the top (if any are) | The main window comes forward on **that** task's page — not the board root, not a new window. If nothing needs attention the menu says *"Nothing needs attention"* instead, which is the correct empty state, not a failure |
+
+Rows 5–7 have never run on a Mac either, and for a sharper reason than rows 1–4: **three
+releases shipped packaged, verified and smoke-tested with no office in them**, so "the source
+has it" has already proved not to mean "the build has it" twice. The menu-bar item is now
+asserted in CI from both directions — the icon's presence inside the `.app` (at build time,
+before publishing, and again in the smoke test) and the app's own report that it built the
+item with a non-empty image. What CI still cannot see is macOS actually *drawing* it, which
+is what row 5 is for.
 
 Two notes on what is *not* a fault:
 
@@ -285,6 +296,99 @@ Two notes on what is *not* a fault:
 - **Only the path is stored, never the origin.** A remembered view can never send the window
   to a different host; if a stored path fails the origin check it is discarded and you land on
   the office instead. Falling back to the office is the designed behaviour, not an error.
+
+### 4d. The menu-bar item and notifications
+
+New in `v2026.10.13`. The point of it: knowing something needs you without keeping a window
+open and without reading email.
+
+**The icon.** A small monochrome glyph at the right-hand end of the menu bar, present whenever
+the app is running and connected. It is deliberately a **placeholder** — a plain filled circle,
+generated rather than designed, because nobody has drawn a Haven mark yet. macOS recolours it
+for light and dark menu bars on its own (that is what the `…Template` filename means), so it
+is not meant to look like a logo. Replacing it later is two PNG files and no code.
+
+**The number beside it** is the count of things needing attention, read from the same feed the
+board's own attention list uses. It is only ever shown bare when the app has just polled
+successfully. If the connection drops, the last number it saw is kept but shown with a
+trailing **`?`** — `3?` means *three, as of the last time we could ask*. A count with no `?`
+is live; a count with a `?` is a memory. The tray never shows a stale number as if it were
+current, which also means the icon with nothing beside it is a real state: either nothing needs
+attention, or we have never had a successful poll at all. The menu says which.
+
+**The menu** (click the icon):
+
+| Row | What it is |
+|---|---|
+| The items at the top | Up to eight things needing attention, newest first, each `IDENTIFIER — why now`. Clicking one brings the window forward on that page. More than eight and the list ends with `+N more` |
+| *Nothing needs attention* | The empty state. This is the healthy case, not an error |
+| A single greyed sentence instead of items | A degraded state, and it names the repair: *Signed out — open Haven Office to sign in*, *macOS is blocking Haven Office from reaching this server* (§ 4b, Local Network), or *Server unreachable* |
+| **Open Office** / **Open Board** | The same two views as the **View** menu and `Cmd+1` / `Cmd+2` |
+| The connection name | Which server these counts come from, or *Not connected* |
+| **Notifications** | A checkbox. See below |
+| **Keep running in the menu bar** | A checkbox, **on** by default: closing the last window leaves the app running in the menu bar rather than quitting. Turn it off if you want the red close button to mean quit |
+| **Quit Haven Office** | Quits for real, menu-bar item included |
+
+**Turning notifications off** — two different switches, and it is worth knowing which one you
+want:
+
+- **In the app:** menu-bar icon → untick **Notifications**. The menu-bar item and its count
+  stay; only the banners stop. The setting is remembered in `tray-settings.json` next to
+  `connections.json` (§ 4a lists where that is), per installation rather than per connection.
+- **In macOS:** **System Settings → Notifications → Haven Office**. This is the one to use if
+  you want macOS's own controls — scheduled summary, Do Not Disturb, lock-screen behaviour —
+  rather than off entirely.
+
+**What you will actually get.** Not one banner per change: the app is deliberately quiet.
+
+- Everything already waiting when the app starts is **silent**. The first poll sets the
+  baseline, so opening the app never produces a burst of notifications for things you already
+  knew about.
+- Each item notifies **once, ever**. Dismissing something on the board and having it reappear
+  in the feed does not re-notify.
+- More than **three** new items in one poll collapses into a single *"N new attention items"*
+  banner instead of N separate ones.
+- At most **eight** notifications in any rolling **10 minutes**. Anything over the cap is
+  *held*, not dropped, and announced on a later poll.
+- Clicking a banner opens that task; clicking a collapsed burst banner opens the board.
+
+#### The macOS notification permission prompt
+
+**On the first launch, macOS will ask once:** a system alert titled *"“Haven Office” Would Like
+to Send You Notifications"*, with **Don't Allow** and **Allow**. It comes from macOS, not from
+the app, and it can appear a few seconds *after* the main window — so it may land on top of the
+office view rather than during startup. There is no way to ask for it earlier or to explain it
+first; macOS shows it the first time the app tries to post a notification.
+
+Choose **Allow** for row 6 of § 4c.
+
+**If you choose Don't Allow** — or if the prompt is dismissed, or you miss it — the app keeps
+working and says nothing about it. This is the honest limitation to know: **macOS never shows
+that prompt again**, and the app cannot detect the refusal and tell you. The menu-bar icon and
+its count carry on working normally, because those are not notifications; only the banners are
+gone. Nothing logs it, nothing warns you, and the app will go on believing notifications are
+enabled.
+
+**To grant it afterwards:**
+
+1. **System Settings → Notifications**.
+2. Find **Haven Office** in the application list and click it.
+3. Turn **Allow notifications** on.
+
+If **Haven Office is not in that list at all**, macOS has not yet registered the app as a
+notification client — which happens if the app has never attempted a notification. Leave it
+running until something needs attention (or confirm **Notifications** is ticked in the
+menu-bar menu, § 4d above), then look again. An unsigned build does not change this: Gatekeeper
+(§ 3a) and notifications are unrelated permissions.
+
+> **Possible, not confirmed: the grant may not survive an update.** Every unsigned build is
+> ad-hoc signed afresh, with no stable signing identity (§ 3a, § 6). Whether macOS therefore
+> treats each `v2026.10.x` as a new app for notification purposes and re-prompts — or silently
+> loses the grant and needs steps 1–3 again — **we have not measured**, because it needs two
+> installs on a real Mac. If you see the prompt a second time after updating, that is this, not
+> a defect; please say so on the issue so this paragraph can become a fact. It should stop
+> mattering once there is a Developer ID (§ 6), which is a credentials change rather than a
+> code change.
 
 ---
 
@@ -772,6 +876,9 @@ already installed it keeps it; publish a higher version to move them.
 | **Local mode hangs on "Starting database"** | First launch initializes an embedded Postgres and is slow. If it is still stuck after ~5 minutes, check the server log (below). |
 | **"Page not found" on the office — remote connection** (`Cmd+1`; the Board and everything else work) | **Not the bundled plugin, and no app version fixes it.** On a remote, the office is served by the remote server, and the plugin bundled inside the app is installed into local mode only — it is never pushed to a remote. The connected server simply has no `paperclip-office` plugin; the lab server is in exactly this state as of 2026-10-18 (§ 4b). The fix is installing the plugin **on the server**. Use **View → Board** meanwhile, or local mode (§ 4a) to see the office. |
 | **The office page 404s — local mode** | **Always the case on `v2026.10.6`–`v2026.10.11`**, for two different reasons (§ 4c): `v2026.10.6`/`v2026.10.7` ship no plugins at all, and `v2026.10.10`/`v2026.10.11` ship the plugin but fail to install it (`ENOENT … scandir …/migrations`). **Install `v2026.10.12` or newer.** On any build, check the app log for `[plugins]`: `No bundled plugins found in …` means the `.app` was packaged without them, `could not be provisioned: … ENOENT … migrations` is the install bug fixed in `v2026.10.12`, any other `could not be provisioned` is a new failure worth reporting with the line quoted, and no `[plugins]` line at all means a build older than that logging. The app deliberately opens anyway rather than refusing to launch; use **View → Board** meanwhile. See [`local-mode-plugin.md`](local-mode-plugin.md). |
+| **No menu-bar icon at all** | **Nothing before `v2026.10.13`** — the menu-bar surface did not exist. On `v2026.10.13` or newer, it appears only once a connection is up, so check the window is actually connected first. If it is and there is still no icon, that is a real finding worth reporting: both the icon's presence in the `.app` and the app's own report that it loaded a non-empty image are asserted in CI, so a build that got published should have neither failure. Quote the `[tray]` line from the app log (§ 8 below) — `icon=empty` means the bundle lost the asset, no `[tray]` line at all means the wiring never ran. |
+| **A menu-bar count that looks wrong or old** | If the number has a trailing **`?`** it *is* old, deliberately — the connection dropped and that is the last count we could actually fetch (§ 4d). Bare numbers are live. If a bare number disagrees with the board, report it with both values. |
+| **No notification banners** | Three independent switches, in the order worth checking: **Notifications** ticked in the menu-bar menu; **System Settings → Notifications → Haven Office** allowed; and whether anything has *newly* appeared at all — items already waiting when the app started are silent by design, and each item notifies only once, ever (§ 4d). If Haven Office is missing from the System Settings list entirely, macOS has not registered it yet; § 4d covers that. |
 | **Remote verification fails** | The app tells you which check failed — see [the table below](#remote-verification-messages) for what each message means. A private authenticated deployment redacting fields is fine and still verifies; a wrong host or an offline server is not. Confirm the URL works in a browser first. |
 | **Signed in on the web but not in the app** | Sessions are not shared with your browser. Sign in inside the app window. |
 | **No updates ever offered** | Check that the newest release has a `latest-mac.yml` asset and is not a draft or prerelease. |

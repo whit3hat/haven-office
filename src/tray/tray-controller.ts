@@ -5,11 +5,9 @@
  * `menu-model.ts`; this file's only job is turning their output into a real
  * `Tray`/`Menu`/`Notification` and feeding them the poll loop.
  *
- * Not wired into `src/main.ts` yet — see the HAV-43 issue thread. `main.ts`
- * has an unrelated change in flight from the data-layer work, and bolting the
- * app-lifecycle wiring on in the same pass risked colliding with it. A
- * caller just needs `createTrayController(deps)` on `app.whenReady()` and
- * `.stop()` on `before-quit`.
+ * Wired into `src/main.ts` by `syncTrayController()`, which rebuilds the
+ * controller after every assignment to `currentConnection` and tears it down
+ * in `before-quit`.
  */
 
 import { Menu, Notification, Tray, app, nativeImage } from "electron";
@@ -30,6 +28,17 @@ import { getTraySettingsFilePath, TraySettingsStore } from "./settings-store";
 import { watch, type WatchHandle } from "../paperclip";
 import type { AttentionItem, InboxDismissal, PaperclipClient, PaperclipResult } from "../paperclip";
 import { success } from "../paperclip";
+
+/**
+ * The line the packaged smoke test waits for.
+ *
+ * Deliberately duplicated in `scripts/packaged-smoke-assertions.mjs` rather
+ * than imported: the smoke workflow checks the repo out and runs the script
+ * straight from `scripts/`, with no `pnpm install` and no build, so there is no
+ * `dist/` for it to import from. `test/packaged-smoke-assertions.test.mjs`
+ * asserts the two strings are still the same one.
+ */
+const TRAY_READY_PREFIX = "[tray] menu-bar item created";
 
 export interface TrayControllerDeps {
   client: PaperclipClient;
@@ -60,8 +69,19 @@ export function createTrayController(deps: TrayControllerDeps): TrayController {
   const settingsStore = new TraySettingsStore(getTraySettingsFilePath(deps.userDataPath));
   const notificationGate = new NotificationGate(DEFAULT_NOTIFICATION_POLICY);
 
-  const tray = new Tray(trayIcon(deps.iconPath));
+  const icon = trayIcon(deps.iconPath);
+  const tray = new Tray(icon);
   tray.setToolTip("Haven Office");
+  // The packaged smoke test's only runtime handle on "is there a menu-bar
+  // item". `new Tray(image)` succeeds even when `image` is empty, and an empty
+  // template image draws nothing at all, so a bundle missing the asset looks
+  // exactly like a working app from the outside — the same shape of failure as
+  // the three releases that shipped with no office in them. Reporting whether
+  // the image loaded, not just that the Tray was constructed, is what makes it
+  // assertable. See scripts/packaged-smoke-assertions.mjs.
+  console.log(
+    `${TRAY_READY_PREFIX} icon=${icon.isEmpty() ? "empty" : "loaded"} path=${deps.iconPath}`,
+  );
 
   let surfaceState: SurfaceState = { kind: "unreachable", message: "Connecting…" };
   let currentItems: AttentionItem[] = [];
