@@ -549,19 +549,22 @@ server version is independent of this and is recorded in
 
 #### Not every tag is a release
 
-As of 2026-10-18, **`v2026.10.6` and `v2026.10.7` are the only published releases** — and
-both of them ship without the office (see § 4c). Eight other tags have **no release behind
-them**:
+Measured against the releases API on **2026-10-19**, five tags have a published release and
+eight do not:
 
-- `v2026.10.0` through `v2026.10.5` — each one a `Release Desktop` run that failed in macOS
-  packaging or verification, tagged before the run proved itself. What each failure was, and
-  the fix it produced, is in step 3 below.
-- `v2026.10.8` and `v2026.10.9` — each superseded before it finished building, and cancelled
-  rather than spending another ~40 minutes of macOS runner on a release that would have been
-  replaced within the hour. `v2026.10.8`'s content shipped in `v2026.10.9`; `v2026.10.9`'s
-  shipped in `v2026.10.10`, which also carries the bundled-plugins *packaging* fix — though
-  not the install fix, which is `v2026.10.12`. `v2026.10.9` was
-  cancelled specifically because it would have published a third release with no office.
+| Tag | Release? | Notes |
+|---|---|---|
+| `v2026.10.0` – `v2026.10.5` | **no** | Each a `Release Desktop` run that failed in macOS packaging or verification, tagged before the run proved itself. What each failure was, and the fix it produced, is in step 3 below |
+| `v2026.10.6`, `v2026.10.7` | yes | **Ship without the office** — no bundled plugins at all (§ 4c) |
+| `v2026.10.8`, `v2026.10.9` | **no** | Each superseded before it finished building and cancelled, rather than spending another ~40 minutes of macOS runner on a release that would be replaced within the hour. `v2026.10.8`'s content shipped in `v2026.10.9`; `v2026.10.9`'s in `v2026.10.10`. `v2026.10.9` was cancelled specifically because it would have published a third release with no office |
+| `v2026.10.10`, `v2026.10.11` | yes | **Ship the office plugin but cannot install it** — the `migrations` `ENOENT` (§ 4c) |
+| `v2026.10.12` | yes | First release whose office actually works |
+| `v2026.10.13` | yes | Adds the menu-bar attention surface (§ 4d). First release with the tray asserted in the bundle — see the note in step 3 below, because it was **not** in the bundle until that assertion was written |
+
+So **do not install from a tag** — a tag may have no assets at all, and the highest tag is
+usually not the newest *release*. Install from the
+[releases page](https://github.com/whit3hat/haven-office/releases), which only ever lists runs
+that packaged, verified and published.
 
 So **do not install from a tag** — a tag may have no assets at all, and the highest tag is
 usually not the newest *release*. Install from the
@@ -820,13 +823,51 @@ that packaged, verified and published.
    the manual toggle as the step, and the purpose string is what makes that toggle exist.
    Nothing here needs an Apple credential and no entitlement is involved.
 
+   **The tray's template icon — the third instance of the same defect, caught before it
+   shipped.** `v2026.10.13` adds the menu-bar item (§ 4d). Its icon was staged in
+   `electron-builder.yml` and **not** in `buildStageConfig`, so every `.dmg` would have
+   carried no `Contents/Resources/trayTemplate.png`.
+
+   The reason it would have been invisible: `nativeImage.createFromPath()` returns an **empty
+   image** for a file that does not exist rather than throwing, and `new Tray(emptyImage)`
+   succeeds. The result is a menu-bar item that is present, functional and draws nothing —
+   indistinguishable, from the outside, from a build where the tray was never wired at all.
+
+   Found by writing the smoke assertion *before* dispatching the release, which is the only
+   reason it is in this list as a near-miss rather than as another shipped release. Three for
+   three now: **an asset added to `electron-builder.yml` alone is absent from every published
+   build.** The entry has to go in `buildStageConfig` too, *and* the file has to be copied
+   into the stage by `stageRuntimeFiles` (that config's paths are relative to the staging
+   directory, not the repo).
+
+   Guarded in four places, which is what the previous two defects earned:
+
+   - `test/release-macos-local.test.mjs` asserts `buildStageConfig` stages both files at the
+     resources root, on both signing paths. This is the test that would have caught it.
+   - `stageRuntimeFiles` fails the build outright if `build/trayTemplate*.png` is missing.
+   - `verify-macos-release.mjs` asserts both are inside the packed `.app`, are real PNGs, and
+     that `@2x` is exactly twice `@1x` — which also catches the same file staged twice,
+     shipping a blurry icon on every Retina Mac. **This runs before publishing**, so a build
+     that lost them cannot become a release.
+   - the packaged smoke test checks the bundle again before launching, then waits for the
+     app's own `[tray] menu-bar item created icon=loaded` line. The last one is the only check
+     that proves the *wiring* ran: a staged asset whose controller is never called is still no
+     menu-bar item, and those two failures have different causes.
+
+   What none of it proves is that macOS actually *draws* the icon. That is § 4c row 5, and it
+   needs the owner's Mac.
+
    The run does three things in order:
 
    - `build-mac` prints **signed** or **unsigned** to the run summary, builds both arches
      via `pnpm release:mac:local`, and runs `scripts/verify-macos-release.mjs` on each — which
      checks every Mach-O payload is signed, that packaged native binaries match the bundled
-     Node architecture, and that the bundled server has its UI, dependencies and catalog
-     manifests. **If that fails, the release stops here.** That is the intended behaviour.
+     Node architecture, that the bundled server has its UI, dependencies and catalog
+     manifests, that the `Info.plist` declares Local Network intent, that the office plugin
+     and its declared `migrations` directory are present, and that both tray template icons
+     are present and correctly sized. **If any of that fails, the release stops here.** That
+     is the intended behaviour, and every item on that list is there because something it now
+     checks once shipped without it.
    - it merges both arches' `latest-mac.yml` into one updater manifest
      (`prepare-macos-release-assets.mjs`).
    - `publish-mac` creates a draft release at your tag, uploads the DMGs, ZIPs and blockmaps,
@@ -841,12 +882,20 @@ that packaged, verified and published.
    `arch=x64`, because each runs on a native runner of that architecture.
 
    It downloads the release's ZIP, launches the real packaged app with an isolated
-   `userData` and `PAPERCLIP_HOME`, and asserts the bundled server comes up and serves
-   `/get-session`, `/api/skills/catalog` and `/api/teams/catalog` — and that the app never
-   touched the production data directories.
+   `userData` and `PAPERCLIP_HOME`, and asserts:
+
+   - the tray's template icons are in the bundle — checked **before** the app is launched,
+     since it needs nothing running;
+   - the bundled server comes up and serves `/get-session`, `/api/skills/catalog` and
+     `/api/teams/catalog`;
+   - the app reports building its menu-bar item with a **non-empty** icon image;
+   - every bundled plugin reaches `installed` at its pinned version — the closest automated
+     proxy for the office view not 404ing;
+   - and that the app never touched the production data directories.
 
    Record both results on the release issue. A green smoke test plus a green
-   `verify-macos-release` is the bar for telling the team to install.
+   `verify-macos-release` is the bar for telling the team to install. Neither can see what
+   macOS draws, which is what the § 4c install card is for.
 
 5. **Notarize — only if the build is signed.** Skip this entirely for an unsigned build;
    there is nothing to notarize. Otherwise follow

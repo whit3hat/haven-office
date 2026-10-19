@@ -33,6 +33,7 @@ havenCo and pointed at havenCo's releases.
 - 🌐 **Remote connection mode** — connect the shell to verified upstream Paperclip remotes in authenticated mode, with saved connections and quick reconnects.
 - 📦 **Paperclip inside** — ships an unmodified build of the upstream Paperclip server and UI. What you get in the app is exactly what you'd get by cloning and running the main repo.
 - 🔄 **Update checks** — watches [whit3hat/haven-office](https://github.com/whit3hat/haven-office) GitHub Releases for new versions. While builds are unsigned it tells you a new version exists and links the download; macOS only lets a *signed* app replace itself in place ([install runbook § 5](docs/install-runbook.md#5-auto-updates)).
+- 🔔 **Menu-bar attention surface** — a menu-bar item showing what needs you, with notifications for anything new, so you do not have to keep a window open. Quiet by design: each item notifies once, bursts collapse, and a count it could not refresh is marked stale rather than shown as live. Both switches and the macOS permission prompt are in [install runbook § 4d](docs/install-runbook.md#4d-the-menu-bar-item-and-notifications).
 - 🖥 **Native menus, windowing, and system tray** — the Paperclip UI, but as a real desktop app.
 
 Under the hood, the app can either:
