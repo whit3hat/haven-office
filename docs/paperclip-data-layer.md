@@ -292,6 +292,13 @@ strategy swap, not a redesign. But it should be confirmed before a release:
    `test/partition-probe-fetch.test.mjs` asserts our half (a cookie-bearing
    probe still resolves a declined redirect as a 3xx with its `Location`).
    Bundle it into HAV-47's Verify Remote pass, which touches the same handler.
+6. **Verify Remote on a saved profile (HAV-47).** Sign in to a saved remote,
+   reopen the launcher, and press **Verify Remote** on that URL. It should
+   report an active session, not "sign-in required". The fix resolves the
+   saved profile from the typed URL's origin so both the probe and the window
+   read the same partition; a Mac is what proves the partition it now picks is
+   the one Chromium actually stored the cookie in.
+   `test/window-policy.test.mjs` asserts the selection itself.
 
 ## 5. Module layout
 

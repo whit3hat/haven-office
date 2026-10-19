@@ -14,7 +14,7 @@ import {
   type Session,
 } from "electron";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -44,6 +44,8 @@ import {
   isNavigationAllowed,
   localPartition,
   remotePartitionForProfile,
+  remotePartitionKey,
+  savedProfileIdForRemoteUrl,
   shouldOpenExternally,
 } from "./connection/window-policy";
 import {
@@ -1116,13 +1118,20 @@ async function reopenCurrentConnectionWindow(): Promise<boolean> {
   return true;
 }
 
-function remotePartitionKey(profileId: string | null, origin: string): string {
-  if (profileId) {
-    return `persist:paperclip-remote-${profileId}`;
-  }
-
-  const hash = createHash("sha256").update(origin).digest("hex").slice(0, 12);
-  return `persist:paperclip-remote-${hash}`;
+/**
+ * The profile whose partition a remote URL belongs in.
+ *
+ * An explicit profile — connecting from the saved list, or editing one — always
+ * wins. A typed URL falls back to the saved profile that owns its origin, so
+ * verifying and connecting read the same cookie jar as the saved connection the
+ * user is already signed in to. One function for both sides on purpose: the
+ * bug this replaces was two call sites disagreeing about the same host.
+ */
+function resolveRemoteProfileId(profileId: string | null, remoteUrl: string): string | null {
+  return (
+    profileId
+    ?? savedProfileIdForRemoteUrl({ remoteUrl, profiles: connectionStore.listProfiles() })
+  );
 }
 
 /**
@@ -1409,10 +1418,18 @@ async function bootRemote(options: {
     url: normalized.normalizedUrl,
   });
 
+  // A typed URL for a host we already have saved connects as that saved
+  // connection rather than as a stranger to it: same partition, so the same
+  // signed-in session Verify Remote just reported.
+  const connectionProfileId = resolveRemoteProfileId(
+    options.profileId ?? null,
+    normalized.normalizedUrl,
+  );
+
   const result = await preflightRemoteConnection({
     remoteUrl: normalized.normalizedUrl,
     localServerVersion: resolveLocalServerVersion(),
-    fetchImpl: remotePartitionFetch(options.profileId ?? null, normalized.origin),
+    fetchImpl: remotePartitionFetch(connectionProfileId, normalized.origin),
   });
 
   if (bootId !== bootSequence) {
@@ -1420,8 +1437,8 @@ async function bootRemote(options: {
   }
 
   if (!result.ok) {
-    if (options.profileId) {
-      connectionStore.recordRemoteHealth(options.profileId, result);
+    if (connectionProfileId) {
+      connectionStore.recordRemoteHealth(connectionProfileId, result);
       sendLauncherState();
     }
 
@@ -1434,9 +1451,9 @@ async function bootRemote(options: {
   }
 
   let savedProfile: ConnectionProfile | null = null;
-  if (options.profileId) {
-    connectionStore.syncRemoteProfileUrl(options.profileId, result.normalizedUrl, result.insecureTransport);
-    savedProfile = connectionStore.getProfile(options.profileId);
+  if (connectionProfileId) {
+    connectionStore.syncRemoteProfileUrl(connectionProfileId, result.normalizedUrl, result.insecureTransport);
+    savedProfile = connectionStore.getProfile(connectionProfileId);
   } else if (options.saveProfile || options.rememberChoice) {
     savedProfile = connectionStore.saveRemoteProfile({
       name: options.displayName,
@@ -1453,7 +1470,7 @@ async function bootRemote(options: {
   }
   sendLauncherState();
 
-  const profileId = savedProfile?.id ?? options.profileId ?? null;
+  const profileId = savedProfile?.id ?? connectionProfileId;
   const partition = remotePartitionKey(profileId, result.origin);
   // Setup and sign-in are driven by the server's own redirects, so only a
   // usable session deep-links to the office or the remembered view.
@@ -1586,10 +1603,16 @@ function registerLauncherIpc(): void {
   ipcMain.handle("launcher:verify-remote", (_event, payload: { remoteUrl: string }) => {
     // Verify over the very partition Connect Remote would use. Without this the
     // button probed with Node's global fetch while the connection used the
-    // Chromium session, so the two could disagree about the same host.
+    // Chromium session, so the two could disagree about the same host. The
+    // profile matters for the same reason: a saved remote's cookies live in its
+    // own partition, and probing the origin partition instead reports a signed-in
+    // user as signed out. bootRemote resolves the profile the same way, so the
+    // two cannot drift apart again.
+    const profileId = resolveRemoteProfileId(null, payload.remoteUrl);
+
     let fetchImpl: typeof fetch | undefined;
     try {
-      fetchImpl = remotePartitionFetch(null, normalizeRemoteUrl(payload.remoteUrl).origin);
+      fetchImpl = remotePartitionFetch(profileId, normalizeRemoteUrl(payload.remoteUrl).origin);
     } catch {
       // No parseable origin means no partition to probe through; preflight
       // reports invalid_url without issuing a request.
