@@ -34,7 +34,7 @@ import { provisionBundledPlugins } from "./connection/plugin-provisioning";
 import { preflightRemoteConnection } from "./connection/preflight";
 import { ConnectionStore, getConnectionsFilePath } from "./connection/profiles";
 import { normalizeRemoteUrl } from "./connection/validate";
-import { partitionCookieReader } from "./paperclip/electron";
+import { createElectronPaperclipClient, partitionCookieReader } from "./paperclip/electron";
 import {
   applyDesktopUserDataOverride,
   assertIsolatedRuntimePaths,
@@ -58,6 +58,7 @@ import type {
   ConnectionProfile,
   RemotePreflightResult,
 } from "./connection/types";
+import { createTrayController, type TrayController } from "./tray/tray-controller";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -100,6 +101,7 @@ let currentConnection: {
 } | null = null;
 
 let connectionStore: ConnectionStore;
+let trayController: TrayController | null = null;
 
 type LauncherView =
   | "chooser"
@@ -171,6 +173,19 @@ function getAppRoot(): string {
   }
 
   return path.resolve(app.getAppPath(), "..");
+}
+
+/**
+ * The tray's template image (HAV-43). A placeholder glyph, not a designed
+ * asset — see `build/trayTemplate.png`. Shipped at the resources root
+ * (`electron-builder.yml`'s `extraResources`), unlike `app-server`.
+ */
+function trayIconPath(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "trayTemplate.png");
+  }
+
+  return path.join(path.resolve(app.getAppPath(), ".."), "build", "trayTemplate.png");
 }
 
 function resolveLocalServerVersion(): string | null {
@@ -1330,6 +1345,7 @@ async function bootLocal(options: {
       allowedOrigin,
       partition: localPartition(),
     };
+    syncTrayController();
     connectionStore.recordConnectionResult(LOCAL_PROFILE_ID);
     if (options.rememberChoiceExplicit) {
       connectionStore.setRememberedProfile(
@@ -1486,6 +1502,7 @@ async function bootRemote(options: {
       allowedOrigin: result.origin,
       partition,
     };
+    syncTrayController();
     if (savedProfile) {
       connectionStore.recordConnectionResult(savedProfile.id, result);
     }
@@ -1560,6 +1577,7 @@ function registerLauncherIpc(): void {
         ...currentConnection,
         profileId: null,
       };
+      syncTrayController();
     }
     sendLauncherState();
     return buildLauncherSnapshot();
@@ -1787,6 +1805,63 @@ async function navigateToDesktopView(viewKey: string): Promise<void> {
   }
 }
 
+/**
+ * Click-through for the tray (HAV-43): the same reopen-then-load path
+ * `navigateToDesktopView` uses, so there is one navigation path, not two.
+ * `url` is already resolved and origin-checked by the tray controller
+ * (`resolveWithinOrigin` / `resolveDesktopViewUrl`) before this is called.
+ */
+async function openUrlInConnectionWindow(url: string): Promise<void> {
+  if (!(await reopenCurrentConnectionWindow())) {
+    return;
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    await mainWindow.loadURL(url);
+  }
+}
+
+/**
+ * (Re)builds the tray's data source to match `currentConnection`. Called
+ * after every place that assigns `currentConnection`, so the tray never
+ * polls a stale origin or partition after switching accounts.
+ */
+function syncTrayController(): void {
+  trayController?.stop();
+  trayController = null;
+
+  if (!currentConnection) {
+    return;
+  }
+
+  const { profileId, allowedOrigin, partition } = currentConnection;
+  const companyPrefix = connectionStore.getCompanyPrefix(profileId);
+  const connectionName = profileId ? connectionStore.getProfile(profileId)?.name ?? null : null;
+
+  trayController = createTrayController({
+    client: createElectronPaperclipClient({
+      origin: allowedOrigin,
+      companyId: companyPrefix,
+      partition,
+      // The partition already uniquely scopes a saved profile or an ad hoc
+      // origin (see `remotePartitionKey`); reusing it here keeps the
+      // fallback-credential scope consistent with the cookie scope instead
+      // of inventing a second identity for the same connection.
+      profileId: profileId ?? partition,
+      userDataPath: app.getPath("userData"),
+    }),
+    userDataPath: app.getPath("userData"),
+    allowedOrigin,
+    companyPrefix,
+    connectionName,
+    onOpenUrl: (url) => {
+      void openUrlInConnectionWindow(url);
+    },
+    iconPath: trayIconPath(),
+    isFocused: () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()),
+  });
+}
+
 function buildConnectionMenuItems(): MenuItemConstructorOptions[] {
   const snapshot = connectionStore.getSnapshot();
   const recentProfiles = connectionStore.getRecentRemoteProfiles(5);
@@ -1945,6 +2020,8 @@ app.on("before-quit", async (event) => {
   }
 
   stopLocalServerMonitor();
+  trayController?.stop();
+  trayController = null;
   if (!serverProcess) {
     return;
   }

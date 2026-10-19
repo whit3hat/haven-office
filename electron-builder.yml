@@ -59,6 +59,12 @@ extraResources:
     to: app-server/node-bin
     filter:
       - "**/*"
+  # macOS menu-bar template icon (HAV-43). Placeholder glyph, not a designed
+  # asset — swap when the real icon lands, same two filenames.
+  - from: build/trayTemplate.png
+    to: trayTemplate.png
+  - from: build/trayTemplate@2x.png
+    to: trayTemplate@2x.png
 
 # ─── macOS ───────────────────────────────────────────────────────────────────
 
