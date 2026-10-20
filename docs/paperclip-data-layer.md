@@ -264,6 +264,14 @@ shared host: roughly 290 requests a day instead of 5,700.
 None of this blocks P2 — the `AuthStrategy` seam means a surprise costs a
 strategy swap, not a redesign. But it should be confirmed before a release:
 
+> **Every item here carries the build it is answerable on.** An owner check is
+> only a check if the behaviour it describes is in something he can install.
+> HAV-47's card asked for item 6 while the fix sat on `master` in no tag, so the
+> only answer available was the bug the fix removes — a false failure, caught on
+> HAV-66. Before turning an item into a card, resolve its floor
+> (`git tag --contains <commit>`) and put the tag and the asset name in the
+> prompt. "Latest" is not a floor.
+
 1. **The cookie round trip.** With the window signed in to a remote, call
    `client.getMe()` from the main process and confirm it returns 200 rather
    than 401. A 401 means the cookie is not being attached; check
@@ -283,22 +291,35 @@ strategy swap, not a redesign. But it should be confirmed before a release:
    reach Chromium and `preflightRemoteConnection` returns `signed_in`. The
    cookie round trip in item 1 is the same mechanism one layer up, and this is
    the first real-Chromium evidence for it.
-5. **The redirect interaction (HAV-47).** The half of HAV-45's Mac plan that
-   the signed-in connect does not exercise: point Verify Remote at a host that
-   redirects `/api/health` and confirm it still reports the redirect target,
-   not an unreachable host. That is the one interaction between
-   `credentials: "include"` and the deliberate `redirect: "manual"` handling in
-   `src/connection/manual-redirect-fetch.ts` that only Chromium can settle.
-   `test/partition-probe-fetch.test.mjs` asserts our half (a cookie-bearing
-   probe still resolves a declined redirect as a 3xx with its `Location`).
-   Bundle it into HAV-47's Verify Remote pass, which touches the same handler.
-6. **Verify Remote on a saved profile (HAV-47).** Sign in to a saved remote,
-   reopen the launcher, and press **Verify Remote** on that URL. It should
-   report an active session, not "sign-in required". The fix resolves the
-   saved profile from the typed URL's origin so both the probe and the window
-   read the same partition; a Mac is what proves the partition it now picks is
-   the one Chromium actually stored the cookie in.
-   `test/window-policy.test.mjs` asserts the selection itself.
+5. **The redirect interaction (HAV-68).** *Floor: `v2026.10.13`.* The half of
+   HAV-45's Mac plan that the signed-in connect does not exercise: point Verify
+   Remote at a host that redirects `/api/health` and confirm it still reports
+   the redirect target, not an unreachable host. That is the one interaction
+   between `credentials: "include"` and the deliberate `redirect: "manual"`
+   handling in `src/connection/manual-redirect-fetch.ts` that only Chromium can
+   settle. `test/partition-probe-fetch.test.mjs` asserts our half (a
+   cookie-bearing probe still resolves a declined redirect as a 3xx with its
+   `Location`).
+
+   **Do not bundle this with item 6** — that is what HAV-66 found. The two have
+   different floors. `manual-redirect-fetch.ts` and `partition-probe-fetch.ts`
+   are byte-identical between `v2026.10.13` and `master`, and a redirecting host
+   with no saved profile resolves to `null` and so to the same origin-hash
+   partition on both (`savedProfileIdForRemoteUrl`, `window-policy.ts`), so a
+   `v2026.10.13` answer is valid for `master`. **Pick a redirecting URL that is
+   not one of the saved remotes**; if it is, the two builds read different cookie
+   jars and the answer stops transferring.
+6. **Verify Remote on a saved profile (HAV-47).** *Floor: the first tag
+   containing `bf49cf71` — as of 2026-10-20 there is none, so this is not yet
+   answerable. HAV-67 cuts it.* Sign in to a saved remote, reopen the launcher,
+   and press **Verify Remote** on that URL. It should report an active session,
+   not "sign-in required". The fix resolves the saved profile from the typed
+   URL's origin so both the probe and the window read the same partition; a Mac
+   is what proves the partition it now picks is the one Chromium actually stored
+   the cookie in. `test/window-policy.test.mjs` asserts the selection itself.
+
+   On any build without `bf49cf71` this check reports "sign-in required" by
+   construction. That is the bug, not a verdict on the fix.
 
 ## 5. Module layout
 
