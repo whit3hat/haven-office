@@ -137,13 +137,75 @@ test("a genuine transport error rejects with that error", async () => {
   await assert.rejects(pending, /ERR_CERT_AUTHORITY_INVALID/);
 });
 
-test("closing before any response rejects rather than hanging", async () => {
+// The owner hit exactly this on v2026.10.13 and the badge read "Request to
+// https://paperclip.lab.havenco.xyz/api/health closed before a response
+// arrived." — no code, so src/paperclip/transport.ts could attach no hint and
+// nothing in the sentence named a repair. A synthesized error has to carry a
+// code for the same reason a forwarded one does.
+test("closing before any response rejects with a code the diagnostics can map", async () => {
   const { requests, fetchImpl } = harness();
   const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
 
   requests[0].emit("close");
 
-  await assert.rejects(pending, /closed before a response arrived/);
+  await assert.rejects(pending, (error) => {
+    assert.equal(error.code, "ERR_CONNECTION_CLOSED");
+    assert.match(error.message, /ended before any HTTP response arrived/);
+    // The host, not this wrapper's internals, is what the reader can act on.
+    assert.match(error.message, /paperclip\.lab\.havenco\.xyz/);
+    return true;
+  });
+});
+
+// "Nothing answered" and "something answered and was cut off" call for
+// different repairs, and collapsing them into one sentence hid the fact that
+// the host had already been reached.
+test("closing mid-body says a response started and names its status", async () => {
+  const { requests, fetchImpl } = harness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  const response = fakeResponse({ statusCode: 200, headers: {} });
+  requests[0].emit("response", response);
+  response.emit("data", Buffer.from('{"status":"o'));
+  requests[0].emit("close");
+
+  await assert.rejects(pending, (error) => {
+    assert.equal(error.code, "ERR_RESPONSE_INCOMPLETE");
+    assert.match(error.message, /sent HTTP 200/);
+    assert.match(error.message, /before the response body finished/);
+    assert.doesNotMatch(error.message, /no HTTP response|ended before any/);
+    return true;
+  });
+});
+
+// A `close` that arrives after the body ended is the documented last event of
+// every successful transaction. It must not overwrite the resolved Response.
+test("a close after a completed body does not turn success into a failure", async () => {
+  const { requests, fetchImpl } = harness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  const response = fakeResponse({ statusCode: 200, headers: {} });
+  requests[0].emit("response", response);
+  response.emit("data", Buffer.from('{"status":"ok"}'));
+  response.emit("end");
+  requests[0].emit("close");
+
+  const result = await pending;
+  assert.equal(result.status, 200);
+  assert.equal(await result.text(), '{"status":"ok"}');
+});
+
+test("an upstream abort is reported as cancelled, with a code", async () => {
+  const { requests, fetchImpl } = harness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit("abort");
+
+  await assert.rejects(pending, (error) => {
+    assert.equal(error.code, "ERR_ABORTED");
+    assert.match(error.message, /was cancelled/);
+    return true;
+  });
 });
 
 test("an abort signal rejects and cancels the in-flight request", async () => {

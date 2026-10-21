@@ -138,6 +138,8 @@ Local data lives in:
 
 This is the mode most of the team wants.
 
+<a id="remote-prerequisites"></a>
+
 > **Prerequisite — that host name only exists on the lab network.** Measured
 > 2026-10-18: `paperclip.lab.havenco.xyz` is **NXDOMAIN on public DNS** (the authoritative
 > `havenco.xyz` zone is on Route 53 and has no record for it) and resolves, on the lab's own
@@ -147,12 +149,31 @@ This is the mode most of the team wants.
 > click anything:
 >
 > ```sh
-> curl -sS -m 8 -o /dev/null -w '%{http_code}\n' https://paperclip.lab.havenco.xyz/api/health
+> curl -sS -m 8 -o /dev/null \
+>   -w 'http=%{http_code} ip=%{remote_ip} tls=%{ssl_verify_result}\n' \
+>   https://paperclip.lab.havenco.xyz/api/health
 > ```
 >
-> `200` means you are good. `Could not resolve host` is DNS — compare `scutil --dns | grep
-> nameserver` against the two addresses above. A timeout means DNS is fine but you are not on
-> the network that can route to `192.168.4.8`.
+> `http=200 ip=192.168.4.8 tls=0` means you are good, and the `ip=` is worth reading rather
+> than skipping: a *different* address means some other network's DNS answered this name, and
+> whatever is at that address is not our server. `Could not resolve host` is DNS — compare
+> `scutil --dns | grep nameserver` against the two addresses above. A timeout means DNS is fine
+> but you are not on the network that can route to `192.168.4.8`.
+>
+> If that command succeeds but the app still fails, the next thing to compare is the
+> *protocol*, because the app's network stack is Chromium's and does not make the same choice
+> `curl` does. This host is behind Caddy and advertises `alt-svc: h3=":443"` (measured
+> 2026-10-21), which invites a browser stack to retry the same request over **QUIC on UDP
+> 443**. Plenty of networks pass TCP 443 and drop UDP 443, and the failure then looks like a
+> connection that ends with no reply:
+>
+> ```sh
+> curl -sS -m 8 -o /dev/null -w 'h2=%{http_code}\n' --http2 https://paperclip.lab.havenco.xyz/api/health
+> curl -sS -m 8 -o /dev/null -w 'h3=%{http_code}\n' --http3 https://paperclip.lab.havenco.xyz/api/health
+> ```
+>
+> `h2=200` with `h3` failing or hanging is that case. (`curl: option --http3: is unknown` just
+> means your `curl` has no HTTP/3 support and the test is inconclusive, not that it passed.)
 >
 > The certificate is a **real Let's Encrypt certificate** for that name (CN
 > `paperclip.lab.havenco.xyz`, issuer `Let's Encrypt YE2`, expires 2027-01-02), so there is no
@@ -185,13 +206,17 @@ This is the mode most of the team wants.
 >
 > | Request | Answer |
 > |---|---|
-> | `GET /api/health` | `HTTP 200`, `content-type: application/json`, `via: 1.1 Caddy`, **no redirect**. Body: `status:"ok"`, `deploymentMode:"authenticated"`, `deploymentExposure:"private"`, `bootstrapStatus:"ready"`, `bootstrapInviteActive:false`. No `authReady` and no `version` — the redacted private shape, which `parseHealthPayload` accepts (`src/connection/preflight.ts`, `hasRedactedAuthenticatedShape`). |
+> | `GET /api/health` | `HTTP 200` over **HTTP/2**, `content-type: application/json`, `via: 1.1 Caddy`, `alt-svc: h3=":443"`, **no redirect**. Body: `status:"ok"`, `deploymentMode:"authenticated"`, `deploymentExposure:"private"`, `bootstrapStatus:"ready"`, `bootstrapInviteActive:false`. No `authReady` and no `version` — the redacted private shape, which `parseHealthPayload` accepts (`src/connection/preflight.ts`, `hasRedactedAuthenticatedShape`). |
 > | `GET /api/auth/get-session` | `HTTP 401`, JSON `{"error":"Board authentication required"}` — the exact payload `isPaperclipAuthRequiredPayload` matches, so the app reads it as `signed_out`, not as a fault. |
 >
 > So a Mac that can reach this host gets **a pass**, in the amber *"sign-in required"*
 > shape described in step 3. A red failure is therefore **between the Mac and the host** —
-> DNS, LAN route, Local Network permission, or something intercepting TLS — and not the
-> server. Start at the `curl` above, not at the server.
+> DNS, LAN route, Local Network permission, HTTP/3 over UDP 443, or something intercepting
+> TLS — and not the server. Start at the `curl` above, not at the server.
+>
+> Re-measured **2026-10-21 00:46 UTC**, unchanged, after the owner reported a failed
+> verification on `v2026.10.13`: `http=200 ip=192.168.4.8 tls=0`, `t_connect=0.0003s`,
+> `t_total=0.033s`.
 
 1. Click the **Remote** tab, then **Connect to Remote**.
 2. In **Remote URL**, enter:
@@ -985,6 +1010,8 @@ failure greys out **Connect Remote**: if that button is clickable, the check suc
 | **TLS validation failed** — *"self-signed certificate (DEPTH_ZERO_SELF_SIGNED_CERT)"*, *"certificate has expired"*, *"unable to verify the first certificate"* | The host answered, but macOS does not trust its certificate. | **Not expected against `paperclip.lab.havenco.xyz`** — that host serves a real Let's Encrypt certificate (measured 2026-10-18, see part 4b), so this message there means something is intercepting TLS. For a different lab host behind a private CA, install the CA in **Keychain Access → System → Certificates** and mark it trusted. The app uses the system trust store, so once Safari trusts the host, so does Haven Office. |
 | **Host unreachable** — *"getaddrinfo ENOTFOUND … (ENOTFOUND)"*, *"net::ERR_NAME_NOT_RESOLVED"* | **DNS.** The name never resolved on this Mac. This is the most likely cause for our own remote: the name exists only in the lab's internal DNS (part 4b). | Point the Mac at the lab resolvers `192.168.4.2` / `192.168.4.3`, or get on the VPN that hands them out. Check with `scutil --dns \| grep nameserver`. |
 | **Host unreachable** — *"connect ECONNREFUSED … (ECONNREFUSED)"* | The name resolved and the host answered, but nothing is listening on that port. | Check the port in the URL. `https://` with no port means 443. |
+| **Could not verify remote** — *"Request to https://… /api/health **closed before a response arrived**"* (the wording on `v2026.10.13` and earlier) or, from the next release, *"The connection to … ended before any HTTP response arrived (ERR_CONNECTION_CLOSED)"* | **The connection ended without a reply.** Reported by the owner against the lab remote on 2026-10-21, at an hour when that server answered the same request with `HTTP 200` from inside the lab. It is not DNS (the name resolved) and not a refused port, and on `v2026.10.13` the message carries **no error code and no hint**, because the app synthesized it itself and attached neither — fixed after that tag, so a newer build names the candidates in the badge. | Three unrelated candidates, in the order that costs least to check. **1.** Run the `curl` in [part 4b](#remote-prerequisites) — if it returns `http=200`, the server and the network are fine. **2.** **Local Network permission** (part 4b): the attempt that triggers macOS's prompt is **killed and not retried**, so grant *Haven Office* under **System Settings → Privacy & Security → Local Network** and press **Verify Remote again** — a single failure on a fresh install proves nothing. **3.** **HTTP/3**: this host advertises `alt-svc: h3=":443"`, so Chromium may retry over UDP 443; compare `curl --http2` with `curl --http3` as in part 4b. Report which of the three it was — that answer is what closes this row. |
+| **Could not verify remote** — *"… sent HTTP 200 but the connection closed before the response body finished (ERR_RESPONSE_INCOMPLETE)"* | A response **started** and was cut off mid-body. Different from the row above: the host was reached and answered, so nothing about DNS, routing or permissions is in question. | Usually something between you and the host truncating the response — a proxy or TLS-inspecting middlebox. Retry once; if it repeats, report it with the full badge text, because a server that truncates its own `/api/health` is a server-side finding worth raising separately. |
 | **Local network blocked** — *"macOS blocked Haven Office from reaching …"*, *"(ERR_NETWORK_ACCESS_DENIED)"*, *"(EPERM)"*, *"(EACCES)"* | **Not a network fault.** macOS 15+ denied *this app* access to the local network. The remote is fine and `curl` in Terminal will prove it. | **System Settings → Privacy & Security → Local Network → enable Haven Office.** If it is not listed, quit and reopen the app, attempt Verify Remote once, then look again. See part 4b. |
 | **Host unreachable** — *"net::ERR_CONNECTION_TIMED_OUT"*, *"ETIMEDOUT"*, *"EHOSTUNREACH"*, *"No response within 8s"* | **Two unrelated causes, and the error cannot tell them apart:** either the address genuinely never answered, or macOS silently dropped the app's connection to it. | **Run the `curl` from part 4b first.** If it returns `200`, the network is fine and this is the Local Network permission — fix that, not your DNS. If it fails too, you are not on a network that can route to the private address `192.168.4.8`: get on the lab LAN or VPN. A coffee-shop network will always fail here. |
 | **Host reachable, not Paperclip** — *"…/api/health redirected (HTTP 302) to …"* | A gateway or SSO proxy is intercepting the probe. The app deliberately does **not** follow redirects while verifying, because the URL is untrusted at that point. | Point the connection at the Paperclip origin itself rather than a vanity or gateway URL. |

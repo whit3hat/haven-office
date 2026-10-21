@@ -575,17 +575,90 @@ test("a timed-out probe says so rather than reporting its own abort", async () =
   assert.match(result.detail, /Privacy & Security → Local Network/);
 });
 
+// The owner's 2026-10-21 report on HAV-44, which no hint covered: "Could not
+// verify remote. Request to https://paperclip.lab.havenco.xyz/api/health closed
+// before a response arrived." The probe synthesized that error itself with no
+// code (src/connection/manual-redirect-fetch.ts), so every branch above fell
+// through and the badge carried no repair at all — on a host measured answering
+// the same request with HTTP 200 from inside the lab the same night.
+test("a connection that ends with no response names the path, not the server", async () => {
+  for (const { code, message } of [
+    { code: "ERR_CONNECTION_CLOSED", message: "The connection to paperclip.lab.havenco.xyz ended before any HTTP response arrived." },
+    { code: "ERR_RESPONSE_INCOMPLETE", message: "paperclip.lab.havenco.xyz sent HTTP 200 but the connection closed before the response body finished." },
+    { code: "ECONNRESET", message: "socket hang up" },
+    { code: "ERR_EMPTY_RESPONSE", message: "net::ERR_EMPTY_RESPONSE" },
+    { code: "ERR_QUIC_PROTOCOL_ERROR", message: "net::ERR_QUIC_PROTOCOL_ERROR" },
+  ]) {
+    const result = await preflightRemoteConnection({
+      remoteUrl: "https://paperclip.lab.havenco.xyz",
+      platform: "darwin",
+      fetchImpl: async () => {
+        throw undiciFetchFailure(message, code);
+      },
+    });
+
+    assert.equal(result.reason, "unreachable", `${code} classification`);
+    assert.match(result.detail, new RegExp(code), `${code} should survive into the detail`);
+    // Each of the three candidate repairs, because the error cannot tell them
+    // apart and the user can.
+    assert.match(result.detail, /curl/, `${code} should name the command that splits it`);
+    assert.match(result.detail, /alt-svc|HTTP\/3/, `${code} should name the HTTP/3 case`);
+    assert.match(
+      result.detail,
+      /Privacy & Security → Local Network/,
+      `${code} should name the macOS permission`,
+    );
+    // The two repairs this failure definitively rules out.
+    assert.doesNotMatch(
+      result.detail,
+      /did not resolve|nothing is listening/,
+      `${code} should not name a repair it has already excluded`,
+    );
+  }
+});
+
+// The prompt eats the attempt that triggers it, so "press Verify again" is
+// load-bearing advice rather than filler: without it the owner reads a failure
+// as final on a Mac that is one toggle and one click from working.
+test("the closed-connection hint tells a macOS user to retry after granting", async () => {
+  const result = await preflightRemoteConnection({
+    remoteUrl: "https://paperclip.lab.havenco.xyz",
+    platform: "darwin",
+    fetchImpl: async () => {
+      throw undiciFetchFailure("net::ERR_CONNECTION_CLOSED", "ERR_CONNECTION_CLOSED");
+    },
+  });
+
+  assert.match(result.detail, /Verify again/);
+});
+
+test("the closed-connection hint keeps the macOS half off other platforms", async () => {
+  const result = await preflightRemoteConnection({
+    remoteUrl: "https://paperclip.lab.havenco.xyz",
+    platform: "win32",
+    fetchImpl: async () => {
+      throw undiciFetchFailure("net::ERR_CONNECTION_CLOSED", "ERR_CONNECTION_CLOSED");
+    },
+  });
+
+  assert.match(result.detail, /curl/);
+  assert.doesNotMatch(result.detail, /Local Network/);
+});
+
 test("an unrecognised transport code gets no invented hint", async () => {
   const result = await preflightRemoteConnection({
     remoteUrl: "https://paperclip.lab.havenco.xyz",
     fetchImpl: async () => {
-      throw undiciFetchFailure("socket hang up", "ECONNRESET");
+      throw undiciFetchFailure("something nobody has mapped yet", "ERR_UNEXPECTED");
     },
   });
 
   assert.equal(result.reason, "unreachable");
-  assert.match(result.detail, /socket hang up/);
-  assert.doesNotMatch(result.detail, /did not resolve|nothing is listening|never answered/);
+  assert.match(result.detail, /something nobody has mapped yet/);
+  assert.doesNotMatch(
+    result.detail,
+    /did not resolve|nothing is listening|never answered|ended before a response/,
+  );
 });
 
 test("preflight names a redirect instead of calling the host non-Paperclip", async () => {

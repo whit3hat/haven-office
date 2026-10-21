@@ -55,6 +55,32 @@ export interface ManualRedirectFetchOptions {
 
 const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
 
+/**
+ * Synthesize a transport error that `describeFetchError` can actually diagnose.
+ *
+ * Everything in src/paperclip/transport.ts keys off `error.code`: the DNS, the
+ * refusal, the macOS Local Network and the TLS hints are all selected by code,
+ * and an error with none reaches the user as a bare sentence with no repair
+ * attached. The errors below are the only ones in the probe path that this
+ * module invents rather than forwards, so they are the only ones that have to
+ * carry their own code — and until 2026-10-21 they did not. The owner's report
+ * on HAV-44 was the bare sentence: "Could not verify remote. Request to
+ * https://paperclip.lab.havenco.xyz/api/health closed before a response
+ * arrived." No code, no classification, nothing to act on.
+ */
+function transportError(message: string, code: string): Error {
+  return Object.assign(new Error(message), { code });
+}
+
+/** `host:port` as typed, for a message a user reads. Falls back to the URL. */
+function describeTarget(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
 function headerEntries(init: HeadersInit | undefined): Array<[string, string]> {
   if (!init) {
     return [];
@@ -90,6 +116,12 @@ export function createManualRedirectFetch(options: ManualRedirectFetchOptions): 
 
       let settled = false;
       let redirected: { status: number; location: string; headers: Headers } | null = null;
+      // Set the moment response headers arrive, so a connection that dies
+      // mid-body can say so instead of claiming no response ever came. Those
+      // are different failures: one is "nothing answered", the other is
+      // "something answered and was cut off", and only the second rules out
+      // the whole class of repairs about reaching the host at all.
+      let responded: { status: number } | null = null;
       let detachSignal = () => {};
 
       const settle = (run: () => void) => {
@@ -160,6 +192,7 @@ export function createManualRedirectFetch(options: ManualRedirectFetchOptions): 
       };
 
       request.on("response", (response: IncomingMessageLike) => {
+        responded = { status: response.statusCode };
         const chunks: Buffer[] = [];
         let total = 0;
         let overflowed = false;
@@ -218,14 +251,36 @@ export function createManualRedirectFetch(options: ManualRedirectFetchOptions): 
         if (resolveRedirect()) {
           return;
         }
-        settle(() => reject(new Error(`Request to ${url} was aborted.`)));
+        settle(() =>
+          reject(transportError(`The request to ${url} was cancelled.`, "ERR_ABORTED")),
+        );
       });
 
+      // `close` is documented as the last event of the transaction, and
+      // Electron's own docs say an `error` is "typically" followed by one — so
+      // reaching this handler unsettled means Electron reported neither a
+      // response nor a network error. The transaction simply ended. That is the
+      // least informative thing the stack can do to us, which is exactly why
+      // the message has to name a code and a target rather than describe this
+      // wrapper's internals.
       request.on("close", () => {
         if (resolveRedirect()) {
           return;
         }
-        settle(() => reject(new Error(`Request to ${url} closed before a response arrived.`)));
+        const target = describeTarget(url);
+        settle(() =>
+          reject(
+            responded
+              ? transportError(
+                `${target} sent HTTP ${responded.status} but the connection closed before the response body finished.`,
+                "ERR_RESPONSE_INCOMPLETE",
+              )
+              : transportError(
+                `The connection to ${target} ended before any HTTP response arrived.`,
+                "ERR_CONNECTION_CLOSED",
+              ),
+          ),
+        );
       });
 
       request.end();

@@ -150,6 +150,31 @@ const LOCAL_NETWORK_DENIED_ERROR_CODES = [
   "EACCES",
 ];
 
+/**
+ * The connection ended without a complete HTTP response.
+ *
+ * This is its own class, not a flavour of "unreachable": the socket got far
+ * enough to end, so a name that never resolved and a port with nothing behind
+ * it are both already excluded. What is left is something on the path between
+ * this app and a server that answers the same URL elsewhere — and the three
+ * candidates have nothing to do with each other, so the hint names all three.
+ *
+ * `ECONNRESET` is undici's spelling ("socket hang up"); the `ERR_*` spellings
+ * are Chromium's, which is what the session-backed probe reports;
+ * `ERR_CONNECTION_CLOSED` and `ERR_RESPONSE_INCOMPLETE` are synthesized by
+ * src/connection/manual-redirect-fetch.ts for an Electron transaction that
+ * ended with no response and one cut off mid-body respectively.
+ */
+const CONNECTION_CLOSED_ERROR_CODES = [
+  "ECONNRESET",
+  "ERR_CONNECTION_CLOSED",
+  "ERR_CONNECTION_RESET",
+  "ERR_EMPTY_RESPONSE",
+  "ERR_RESPONSE_INCOMPLETE",
+  "ERR_QUIC_PROTOCOL_ERROR",
+  "ERR_HTTP2_PROTOCOL_ERROR",
+];
+
 const UNROUTABLE_ERROR_CODES = [
   "ETIMEDOUT",
   "EHOSTUNREACH",
@@ -220,6 +245,26 @@ export function describeTransportFailure(
 
   if (codes.some((code) => REFUSED_ERROR_CODES.includes(code))) {
     return `${host} resolved and answered, but nothing is listening on port ${port}. Check the port in the URL.`;
+  }
+
+  // Reached before the timeout branch below because this failure is faster and
+  // more specific than a timeout: the connection ended, so the host resolved
+  // and something accepted the socket. Naming the path is the whole value here.
+  if (codes.some((code) => CONNECTION_CLOSED_ERROR_CODES.includes(code))) {
+    const base =
+      `The connection to ${host} ended before a response completed, which is neither a name`
+      + " that failed to resolve nor a refused port. `curl` to the same URL splits it fastest:"
+      + " if curl gets a response, the difference is on the path between this app and that host"
+      + " rather than the server — a VPN or proxy intercepting it, a different machine answering"
+      + " this name on this network, or HTTP/3, since a host advertising `alt-svc: h3` can be"
+      + " retried over UDP 443 and a firewall may drop that while TCP keeps working (compare"
+      + " `curl --http2` with `curl --http3`).";
+    return isMac
+      ? `${base} On macOS 15 and later, the first attempt can also be cut off while macOS asks `
+        + "for Local Network permission: enable Haven Office under System Settings → Privacy & "
+        + "Security → Local Network, then press Verify again — the attempt that triggers the "
+        + "prompt is not retried for you."
+      : base;
   }
 
   // Deliberately not a single cause. A private address that never answers is

@@ -291,6 +291,34 @@ Three things about this seam that are easy to get wrong, and are already right:
    strategy takes a loader. That is what makes both unit-testable off a Mac, and it is the
    pattern to copy.
 
+### Diagnostics are a layer, and it keys off `error.code`
+
+`src/paperclip/transport.ts` turns a transport failure into the one thing worth checking next:
+DNS, a refused port, a TLS rejection, a macOS Local Network denial, a connection that ended
+with no reply. **It selects every one of those by `error.code`**, because `fetch` throws away
+the only useful part of a network failure — undici rejects everything as `TypeError: fetch
+failed` and hides the real reason on `error.cause`.
+
+The consequence is easy to miss and was shipped in `v2026.10.13`: **an error your own code
+invents has to carry a code too.** `src/connection/manual-redirect-fetch.ts` synthesizes a
+rejection for an Electron request that ends without a response, and it originally threw a bare
+`new Error("Request to … closed before a response arrived.")`. With no `code`, every branch in
+`describeTransportFailure()` fell through, and the owner's install badge read exactly that
+sentence — naming this module's internals, no classification, nothing to act on, against a
+server that was answering the same request with `HTTP 200` at that moment.
+
+So when you add a surface that can fail:
+
+1. **Forward the platform's error** wherever you can; it already has the code.
+2. **Give a synthesized one a code and a target** — the host, not your function's view of
+   events. Add it to the code group in `transport.ts` and write the hint, or it is invisible.
+3. **Don't collapse distinguishable failures into one message.** "Nothing answered" and
+   "something answered and was cut off" exclude different repairs; one string for both throws
+   that away.
+4. **Test the hint, not just the classification.** `test/connection-preflight.test.mjs`
+   asserts each code names its own repair *and* does not name the repairs it has excluded,
+   which is what stops the hints drifting into one generic paragraph.
+
 ### The pattern to copy for anything native
 
 `src/tray/` is the worked example of the structure every native surface here should have:
