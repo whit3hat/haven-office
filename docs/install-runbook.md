@@ -176,6 +176,23 @@ This is the mode most of the team wants.
 > macOS 15+ they cannot reach the lab remote by any means. Upgrade rather than fighting
 > it.
 
+<a id="lab-remote-server-half"></a>
+
+> **The server half of this check is known good — do not re-diagnose it.** Both
+> requests **Verify Remote** makes were run against `https://paperclip.lab.havenco.xyz`
+> from inside the lab on **2026-10-21 00:36 UTC**, with no credentials, exactly as the
+> app issues them:
+>
+> | Request | Answer |
+> |---|---|
+> | `GET /api/health` | `HTTP 200`, `content-type: application/json`, `via: 1.1 Caddy`, **no redirect**. Body: `status:"ok"`, `deploymentMode:"authenticated"`, `deploymentExposure:"private"`, `bootstrapStatus:"ready"`, `bootstrapInviteActive:false`. No `authReady` and no `version` — the redacted private shape, which `parseHealthPayload` accepts (`src/connection/preflight.ts`, `hasRedactedAuthenticatedShape`). |
+> | `GET /api/auth/get-session` | `HTTP 401`, JSON `{"error":"Board authentication required"}` — the exact payload `isPaperclipAuthRequiredPayload` matches, so the app reads it as `signed_out`, not as a fault. |
+>
+> So a Mac that can reach this host gets **a pass**, in the amber *"sign-in required"*
+> shape described in step 3. A red failure is therefore **between the Mac and the host** —
+> DNS, LAN route, Local Network permission, or something intercepting TLS — and not the
+> server. Start at the `curl` above, not at the server.
+
 1. Click the **Remote** tab, then **Connect to Remote**.
 2. In **Remote URL**, enter:
 
@@ -186,6 +203,14 @@ This is the mode most of the team wants.
 3. Click **Verify Remote**. The app calls that server's `/api/health` and
    `/api/auth/get-session` before it will load anything, and should report
    *"Verified authenticated Paperclip remote detected."*
+
+   **On a fresh install the badge above that line reads *"Verified remote -
+   sign-in required"*, in amber, and that is a pass, not a failure.** You have not
+   signed in yet, so there is no session for the probe to find; the green
+   sentence and an enabled **Connect Remote** button are what tell you the check
+   succeeded. A real failure is red, says **"Could not verify remote"** or
+   names a specific fault, and leaves **Connect Remote** greyed out — see
+   [the message table](#remote-verification-messages).
 4. Optionally give it a **Display name** — e.g. `havenCo lab` — so it is easy to pick from
    saved connections later. Tick **Reconnect to this remote on launch** to make it the
    default.
@@ -933,7 +958,9 @@ already installed it keeps it; publish a higher version to move them.
 | **No menu-bar icon at all** | **Nothing before `v2026.10.13`** — the menu-bar surface did not exist. On `v2026.10.13` or newer, it appears only once a connection is up, so check the window is actually connected first. If it is and there is still no icon, that is a real finding worth reporting: both the icon's presence in the `.app` and the app's own report that it loaded a non-empty image are asserted in CI, so a build that got published should have neither failure. Quote the `[tray]` line from the app log (§ 8 below) — `icon=empty` means the bundle lost the asset, no `[tray]` line at all means the wiring never ran. |
 | **A menu-bar count that looks wrong or old** | If the number has a trailing **`?`** it *is* old, deliberately — the connection dropped and that is the last count we could actually fetch (§ 4d). Bare numbers are live. If a bare number disagrees with the board, report it with both values. |
 | **No notification banners** | Three independent switches, in the order worth checking: **Notifications** ticked in the menu-bar menu; **System Settings → Notifications → Haven Office** allowed; and whether anything has *newly* appeared at all — items already waiting when the app started are silent by design, and each item notifies only once, ever (§ 4d). If Haven Office is missing from the System Settings list entirely, macOS has not registered it yet; § 4d covers that. |
-| **Remote verification fails** | The app tells you which check failed — see [the table below](#remote-verification-messages) for what each message means. A private authenticated deployment redacting fields is fine and still verifies; a wrong host or an offline server is not. Confirm the URL works in a browser first. |
+| **Remote verification fails** | The app tells you which check failed — see [the table below](#remote-verification-messages) for what each message means. A private authenticated deployment redacting fields is fine and still verifies; a wrong host or an offline server is not. Confirm the URL works in a browser first. For the lab remote specifically, the server's half of that check is measured and known good — [see part 4b](#lab-remote-server-half) — so a failure there is between your Mac and the host. |
+| **Verification failed — and clicking the saved connection fails the same way** | **Expected: there is no bypass, by design.** Connecting runs the identical preflight before any window opens (`bootRemote` in `src/main.ts` refuses on a failed result), so a saved connection, a typed URL and the **Verify Remote** button all fail together on the same fault. The repair is whatever the message names, not a different route into the app. The only asymmetry is *which cookie jar* each side probes, and that is a separate bug — see the row below. |
+| **"Verified remote - sign-in required" (amber) for a remote you *are* signed in to** | On any build without `bf49cf71` — which is **every release up to and including `v2026.10.13`** — **Verify Remote** reads a different cookie jar than the window does for a *saved* connection, so it reports no session for one you have. It is cosmetic: **Connect Remote** is still enabled and connecting still works. On a fresh install, before you have signed in at all, this badge is simply the correct answer (part 4b, step 3). |
 | **Signed in on the web but not in the app** | Sessions are not shared with your browser. Sign in inside the app window. |
 | **No updates ever offered** | Check that the newest release has a `latest-mac.yml` asset and is not a draft or prerelease. |
 | **An update was offered but never installed itself** | Expected on an unsigned build — part 5. Use **Open Download Page** and install the `.dmg`. |
@@ -948,8 +975,13 @@ already installed it keeps it; publish a higher version to move them.
 goes wrong. It probes over the same Chromium network session the connection itself will
 use, so a pass here means the real connection can reach the host too.
 
+The two **amber** outcomes below are passes. Everything after them is a failure, and a
+failure greys out **Connect Remote**: if that button is clickable, the check succeeded.
+
 | What it says | What it means | What to do |
 |---|---|---|
+| **Verified remote - sign-in required** (amber) *plus* the green *"Verified authenticated Paperclip remote detected."* | **A pass.** The host is a healthy authenticated Paperclip server and you have no session on it yet. This is the normal result of the very first **Verify Remote** on a new install, and the measured result against our own lab remote ([part 4b](#lab-remote-server-half)). | Click **Connect Remote** and sign in inside the app window. If you believe you *are* already signed in on a saved connection, see the cookie-jar row in the table above. |
+| **Verified remote - setup required** (amber) | A pass. The server is healthy but has no instance admin yet. | Click **Connect Remote** and finish Paperclip's own setup flow in-app. |
 | **TLS validation failed** — *"self-signed certificate (DEPTH_ZERO_SELF_SIGNED_CERT)"*, *"certificate has expired"*, *"unable to verify the first certificate"* | The host answered, but macOS does not trust its certificate. | **Not expected against `paperclip.lab.havenco.xyz`** — that host serves a real Let's Encrypt certificate (measured 2026-10-18, see part 4b), so this message there means something is intercepting TLS. For a different lab host behind a private CA, install the CA in **Keychain Access → System → Certificates** and mark it trusted. The app uses the system trust store, so once Safari trusts the host, so does Haven Office. |
 | **Host unreachable** — *"getaddrinfo ENOTFOUND … (ENOTFOUND)"*, *"net::ERR_NAME_NOT_RESOLVED"* | **DNS.** The name never resolved on this Mac. This is the most likely cause for our own remote: the name exists only in the lab's internal DNS (part 4b). | Point the Mac at the lab resolvers `192.168.4.2` / `192.168.4.3`, or get on the VPN that hands them out. Check with `scutil --dns \| grep nameserver`. |
 | **Host unreachable** — *"connect ECONNREFUSED … (ECONNREFUSED)"* | The name resolved and the host answered, but nothing is listening on that port. | Check the port in the URL. `https://` with no port means 443. |
