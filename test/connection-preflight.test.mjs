@@ -700,6 +700,115 @@ test("preflight distinguishes a non-JSON answer from a bad status", async () => 
   assert.match(gone.detail, /HTTP 404/);
 });
 
+// ---------------------------------------------------------------------------
+// The health probe and the session probe are separate transports
+//
+// v2026.10.13 ran both over the credentialed probe, and it is the first
+// published build whose Verify Remote failed at `/api/health` on the owner's
+// Mac. `/api/health` is public, so the eligibility check must stay the plainest
+// request the app can make; only `/api/auth/get-session` needs credentials
+// (HAV-45). These tests pin which URL each transport is allowed to see.
+// ---------------------------------------------------------------------------
+
+test("preflight sends the health probe over fetchImpl and the session probe over sessionFetchImpl", async () => {
+  const healthUrls = [];
+  const sessionUrls = [];
+
+  const result = await preflightRemoteConnection({
+    remoteUrl: "https://paperclip.lab.havenco.xyz",
+    localServerVersion: "2026.403.0",
+    fetchImpl: async (url) => {
+      healthUrls.push(String(url));
+      return jsonResponse(
+        {
+          status: "ok",
+          version: "2026.403.0",
+          deploymentMode: "authenticated",
+          deploymentExposure: "private",
+          authReady: true,
+          bootstrapStatus: "ready",
+          bootstrapInviteActive: false,
+        },
+        200,
+      );
+    },
+    sessionFetchImpl: async (url) => {
+      sessionUrls.push(String(url));
+      return authRequiredResponse();
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.sessionState, "signed_out");
+
+  // The credentialed transport never sees the eligibility probe, and the plain
+  // one never sees the session probe.
+  assert.deepEqual(healthUrls, ["https://paperclip.lab.havenco.xyz/api/health"]);
+  assert.deepEqual(sessionUrls, ["https://paperclip.lab.havenco.xyz/api/auth/get-session"]);
+});
+
+test("a failing health transport is reported without ever reaching the session probe", async () => {
+  let sessionCalls = 0;
+
+  // The exact failure the owner saw on v2026.10.13: Chromium closed the request
+  // before a response arrived. It must surface as a transport failure, and the
+  // session probe must not run — there is nothing to ask a host that did not
+  // answer the eligibility question.
+  const closed = Object.assign(
+    new Error("Request to https://paperclip.lab.havenco.xyz/api/health closed before a response arrived."),
+    { code: "ERR_CONNECTION_CLOSED" },
+  );
+
+  const result = await preflightRemoteConnection({
+    remoteUrl: "https://paperclip.lab.havenco.xyz",
+    platform: "darwin",
+    fetchImpl: async () => {
+      throw closed;
+    },
+    sessionFetchImpl: async () => {
+      sessionCalls += 1;
+      return authRequiredResponse();
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(sessionCalls, 0);
+});
+
+test("sessionFetchImpl defaults to fetchImpl so a single-transport caller is unchanged", async () => {
+  const seen = [];
+  const responses = [
+    jsonResponse(
+      {
+        status: "ok",
+        version: "2026.403.0",
+        deploymentMode: "authenticated",
+        deploymentExposure: "private",
+        authReady: true,
+        bootstrapStatus: "ready",
+        bootstrapInviteActive: false,
+      },
+      200,
+    ),
+    authRequiredResponse(),
+  ];
+
+  const result = await preflightRemoteConnection({
+    remoteUrl: "https://paperclip.lab.havenco.xyz",
+    fetchImpl: async (url) => {
+      seen.push(String(url));
+      return responses.shift();
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.sessionState, "signed_out");
+  assert.deepEqual(seen, [
+    "https://paperclip.lab.havenco.xyz/api/health",
+    "https://paperclip.lab.havenco.xyz/api/auth/get-session",
+  ]);
+});
+
 function jsonResponse(body, status) {
   return new Response(JSON.stringify(body), {
     status,

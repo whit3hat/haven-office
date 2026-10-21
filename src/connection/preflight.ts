@@ -14,7 +14,27 @@ import type {
 
 interface PreflightOptions {
   remoteUrl: string;
+  /**
+   * Transport for the `/api/health` probe: the eligibility question, asked of a
+   * host the user just typed. It needs no credentials — `/api/health` is public
+   * on every Paperclip deployment — so it is deliberately the plainest request
+   * this app can make.
+   */
   fetchImpl?: typeof fetch;
+  /**
+   * Transport for the `/api/auth/get-session` probe, which is the only request
+   * here that must be authenticated (HAV-45: an unauthenticated probe reports a
+   * signed-in user as `signed_out` and the start path then opens the server root
+   * instead of their remembered view).
+   *
+   * Separate from `fetchImpl` on purpose. Carrying the credentialed transport
+   * across both probes made the *eligibility* check depend on the cookie and
+   * credential machinery it has no use for, and v2026.10.13 — the first build
+   * that did so — is the first build whose Verify Remote failed on the owner's
+   * Mac, at `/api/health`, before any session probe ran. Defaults to `fetchImpl`
+   * so existing callers and tests keep one transport.
+   */
+  sessionFetchImpl?: typeof fetch;
   localServerVersion?: string | null;
   timeoutMs?: number;
   /**
@@ -47,6 +67,7 @@ interface ParsedHealthPayload {
 
 export async function preflightRemoteConnection(options: PreflightOptions): Promise<RemotePreflightResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
+  const sessionFetchImpl = options.sessionFetchImpl ?? fetchImpl;
   const timeoutMs = options.timeoutMs ?? 8_000;
   const platform = options.platform ?? process.platform;
 
@@ -159,7 +180,7 @@ export async function preflightRemoteConnection(options: PreflightOptions): Prom
       };
     }
 
-    const sessionResponse = await fetchSession(fetchImpl, new URL("/api/auth/get-session", normalized.origin), timeoutMs);
+    const sessionResponse = await fetchSession(sessionFetchImpl, new URL("/api/auth/get-session", normalized.origin), timeoutMs);
     if (sessionResponse.sessionState === "unknown") {
       return {
         ok: false,

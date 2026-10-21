@@ -29,6 +29,7 @@ import {
   shouldStopAttemptedServer,
 } from "./connection/local-server-lifecycle";
 import { probeLocalServerHealth } from "./connection/local-server-health";
+import { createManualRedirectFetch } from "./connection/manual-redirect-fetch";
 import { createPartitionProbeFetch } from "./connection/partition-probe-fetch";
 import { provisionBundledPlugins } from "./connection/plugin-provisioning";
 import { preflightRemoteConnection } from "./connection/preflight";
@@ -1147,17 +1148,48 @@ function resolveRemoteProfileId(profileId: string | null, remoteUrl: string): st
  * The session alone does not make the probe *authenticated* — see
  * src/connection/partition-probe-fetch.ts, which is where the cookies and the
  * declined redirects both come from. This function is only the Electron wiring.
+ *
+ * Why two transports and not one
+ * ------------------------------
+ * Both run on the same partition, and that is the part that must not drift. What
+ * differs is credentials:
+ *
+ * - `health` is the plain request: session only, no `credentials`, no `Cookie`.
+ *   `/api/health` is public, so the eligibility check never needed either. This
+ *   is byte-for-byte the shape that shipped in v2026.10.12.
+ * - `session` is the credentialed request, for `/api/auth/get-session` alone.
+ *   HAV-45 needs it: without the partition's cookies the probe reports a
+ *   signed-in user as `signed_out`.
+ *
+ * v2026.10.13 used the credentialed transport for both, and it is the first
+ * published build whose Verify Remote failed on the owner's Mac — at
+ * `/api/health`, before any session probe ran, with Chromium closing the
+ * request before a response arrived. We have no Mac and no mechanism for that
+ * (Electron 41's own declarations describe no such gate), so this is not a
+ * proven root cause. It is the one functional change between the build that
+ * worked and the build that does not, reverted for the request that never
+ * needed it and kept for the request that does.
  */
-function remotePartitionFetch(profileId: string | null, origin: string): typeof fetch {
+function remoteProbeTransports(
+  profileId: string | null,
+  origin: string,
+): { health: typeof fetch; session: typeof fetch } {
   const preflightSession = session.fromPartition(remotePartitionKey(profileId, origin));
+
   // electronNet.request rather than preflightSession.fetch: both use Chromium's
   // stack, but only the former lets us decline a redirect and still see it. See
   // src/connection/manual-redirect-fetch.ts.
-  return createPartitionProbeFetch({
-    session: preflightSession,
-    createRequest: (init) => electronNet.request(init),
-    readCookies: partitionCookieReader(preflightSession),
-  });
+  return {
+    health: createManualRedirectFetch({
+      createRequest: ({ method, url, redirect }) =>
+        electronNet.request({ method, url, redirect, session: preflightSession }),
+    }),
+    session: createPartitionProbeFetch({
+      session: preflightSession,
+      createRequest: (init) => electronNet.request(init),
+      readCookies: partitionCookieReader(preflightSession),
+    }),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1426,10 +1458,12 @@ async function bootRemote(options: {
     normalized.normalizedUrl,
   );
 
+  const probes = remoteProbeTransports(connectionProfileId, normalized.origin);
   const result = await preflightRemoteConnection({
     remoteUrl: normalized.normalizedUrl,
     localServerVersion: resolveLocalServerVersion(),
-    fetchImpl: remotePartitionFetch(connectionProfileId, normalized.origin),
+    fetchImpl: probes.health,
+    sessionFetchImpl: probes.session,
   });
 
   if (bootId !== bootSequence) {
@@ -1610,19 +1644,20 @@ function registerLauncherIpc(): void {
     // two cannot drift apart again.
     const profileId = resolveRemoteProfileId(null, payload.remoteUrl);
 
-    let fetchImpl: typeof fetch | undefined;
+    let probes: { health: typeof fetch; session: typeof fetch } | undefined;
     try {
-      fetchImpl = remotePartitionFetch(profileId, normalizeRemoteUrl(payload.remoteUrl).origin);
+      probes = remoteProbeTransports(profileId, normalizeRemoteUrl(payload.remoteUrl).origin);
     } catch {
       // No parseable origin means no partition to probe through; preflight
       // reports invalid_url without issuing a request.
-      fetchImpl = undefined;
+      probes = undefined;
     }
 
     return preflightRemoteConnection({
       remoteUrl: payload.remoteUrl,
       localServerVersion: resolveLocalServerVersion(),
-      fetchImpl,
+      fetchImpl: probes?.health,
+      sessionFetchImpl: probes?.session,
     });
   });
 

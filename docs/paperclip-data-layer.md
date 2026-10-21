@@ -123,11 +123,21 @@ Honest limits, because they matter for whoever builds P2:
 - The server-side requirements, the 403s and the Electron option semantics are
   **verified** — by live request, by reading the shipped server code, and from
   the shipped Electron type declarations respectively.
-- The cookie round trip has now been executed on a Mac **at the preflight
-  layer** (HAV-45, 2026-10-18): a signed-in partition preflighted as
-  `signed_in` and the window opened on the remembered view. So the mechanism —
-  `credentials: "include"` plus a `Cookie` header read from the partition jar —
-  is confirmed against real Chromium, not just against the type declarations.
+- The cookie round trip has **not** been executed on a Mac, and an earlier
+  revision of this file wrongly said it had. The retraction, because the
+  chronology is the evidence: `credentials: "include"` arrived in `5b147c95`
+  (2026-10-18 22:16 UTC), *after* `v2026.10.12` was tagged (18:53 UTC), and the
+  next published build was `v2026.10.13` (2026-10-19 01:58 UTC). So the
+  2026-10-18 Mac observation this file cited was made on a build that sent no
+  cookies on the probe at all — whatever it demonstrated, it cannot have been
+  this mechanism. `git tag --contains 5b147c95` names exactly one tag,
+  `v2026.10.13`.
+- That matters beyond bookkeeping: `v2026.10.13` is both the first published
+  build carrying `credentials: "include"` and the first whose **Verify Remote
+  failed on the owner's Mac**, at `/api/health`, before any session probe ran
+  (HAV-44, 2026-10-21). Treat the mechanism as unproven against real Chromium.
+  `src/main.ts` now sends only the session probe over it; the health probe is
+  back to the plain `v2026.10.12` transport.
 - The same round trip through `PaperclipClient.getMe()` has **not** been
   executed on a Mac. The build container this was written in has no GUI
   libraries, so the Electron binary cannot start at all:
@@ -285,12 +295,15 @@ strategy swap, not a redesign. But it should be confirmed before a release:
    kinds are omitted or present as `0`.
 3. **`safeStorage` on a real Keychain.** Only needed if the fallback is ever
    used.
-4. ~~**Preflight's session probe (HAV-45).**~~ **Confirmed on the owner's Mac,
-   2026-10-18.** Connecting to a remote the owner was already signed in to
-   opened on the remembered view, not the server root — so the probe's cookies
-   reach Chromium and `preflightRemoteConnection` returns `signed_in`. The
-   cookie round trip in item 1 is the same mechanism one layer up, and this is
-   the first real-Chromium evidence for it.
+4. **Preflight's session probe (HAV-45).** *Floor: the build that follows
+   `v2026.10.13`.* **Not confirmed** — the "confirmed 2026-10-18" note that used
+   to sit here was retracted on 2026-10-21; see §1 for why the dates rule it
+   out. Connect to a remote you are already signed in to and confirm the
+   launcher says "Opening verified remote…" rather than "Opening remote
+   sign-in…", and that the window opens on the remembered view instead of the
+   server root. This is now the only probe that carries
+   `credentials: "include"`, so it is also the only place that mechanism is
+   still exercised.
 5. **The redirect interaction (HAV-68).** *Floor: `v2026.10.13`.* The half of
    HAV-45's Mac plan that the signed-in connect does not exercise: point Verify
    Remote at a host that redirects `/api/health` and confirm it still reports
