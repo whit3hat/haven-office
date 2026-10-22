@@ -351,6 +351,32 @@ So when you add a surface that can fail:
    fails the same way (`docs/install-runbook.md` § 8, step 1). It needs no download and it
    separates "this app completes no request" from "this app cannot reach this host", which is
    the fork the build never addressed.
+7. **The resolution, and the two assumptions that hid it for days.** On 2026-10-22 the owner
+   ran a replica of the probe in vanilla Electron 41.10.7 and timestamped the events. Electron's
+   `ClientRequest` emits `finish` then `close` **synchronously the instant `request.end()` runs**
+   — on the *writable* side, before any network activity — and the real response arrives ~250 ms
+   later. The wrapper's `request.on("close")` handler treated that early close as the end of the
+   transaction, synthesized `ERR_CONNECTION_CLOSED`, and discarded the response that was already
+   coming. Host-independent, which is why the lab host and `example.com` failed identically and
+   why every network theory was a dead end. Fixed in `v2026.10.15` ([`2ab0b743`](https://github.com/whit3hat/haven-office/commit/2ab0b743)):
+   `close` is a result only for a captured redirect or a response cut off mid-body; a bare close
+   is ignored, and the caller's abort timeout is the backstop for a transaction that truly
+   produces nothing. Two assumptions kept this hidden:
+   - **The event model was assumed, not read.** The handler's own comment called `close` "the
+     last event of the transaction" — true for a Node readable stream's response, false for an
+     Electron `ClientRequest`'s writable side. A platform event's ordering is a fact to verify
+     on the platform, not to infer from a sibling API. The unit tests passed only because the
+     fake `createRequest` never emitted `close` early; **a fake that does not reproduce the real
+     event ordering tests a fiction.** The regression test now fires `finish`+`close`
+     synchronously inside `end()`, then a response, and asserts the probe resolves with it.
+   - **"The previous version" was never pinned to a build.** The whole bisect hung on
+     `v2026.10.12` being the last good build, so the diff to inspect was `.12..13`. It was not:
+     the updater log (`~/Library/Logs/Haven Office/main.log`) showed Squirrel *rejected* the
+     `.11`/`.12` auto-updates for an ad-hoc-signature mismatch and the installed build was still
+     `v2026.10.6` — which predated the wrapper entirely. The real diff was `.6..13`, 26 commits,
+     and the wrapper's introduction was in it. **When a report says "the previous version
+     worked," find out which version that was from the machine's own logs before you choose the
+     two endpoints to diff.**
 
 ### The pattern to copy for anything native
 
