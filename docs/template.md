@@ -318,6 +318,18 @@ So when you add a surface that can fail:
 4. **Test the hint, not just the classification.** `test/connection-preflight.test.mjs`
    asserts each code names its own repair *and* does not name the repairs it has excluded,
    which is what stops the hints drifting into one generic paragraph.
+5. **A platform option you assert is *passed* is an option no test has executed.** This is
+   the cost of the pure-logic-plus-one-Electron-file split above, and it is worth naming
+   because it bit this repo hard. Every test in the probe path injects a fake
+   `createRequest`, so `test/partition-probe-fetch.test.mjs` can only assert
+   `requests[0].init.credentials === "include"` — that the option was handed over. Whether
+   Electron *honours* it, and what it does to a request that carries it, is untested by
+   construction: no test here loads Electron. When `v2026.10.13` added that one option, the
+   only machine that had ever run it was the owner's Mac, and it broke **Verify Remote** for
+   the one host he needed. The fake seam is still right; the rule that comes with it is that
+   **a changed platform option is a release risk no amount of green tests reduces** — call it
+   out in the release notes and have one real-hardware check in front of it, the way
+   `docs/install-runbook.md` § 4c's install card does for the bundle.
 
 ### The pattern to copy for anything native
 
