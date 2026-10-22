@@ -496,6 +496,40 @@ Expected final artifacts:
 - `latest-mac.yml`
 - `verification-summary.json`
 
+### Verifying A Release That Is Already Published
+
+The verifier above only ever runs against a local output directory, so a check
+added *after* a tag ships does not apply to it retroactively. That happened with
+the dmg-content check in `9780329c`, which landed an hour after `v2026.10.14`
+was published and therefore never looked inside the `.dmg` that release's users
+download.
+
+Dispatch `verify-published-macos-dmg.yml` to close that gap without re-cutting
+anything:
+
+```bash
+gh workflow run verify-published-macos-dmg.yml \
+  -f tag=v<DESKTOP_VERSION> \
+  -f arch=arm64
+```
+
+It downloads the `.dmg` and its sibling `*-mac.zip` from the named release onto
+a native runner, extracts the ZIP in place to supply the `.app` the verifier
+requires alongside them, and runs the current `verify-macos-release.mjs` over
+all three. Dispatch it once per architecture. Every step reads; nothing is
+uploaded, re-tagged, or re-published, and it needs only `contents: read`.
+
+Two things to know before trusting a result:
+
+- It runs the checker from the default branch, which is newer than the tag by
+  construction. Confirm nothing under `src/` differs between the two, or a
+  failure cannot be attributed to the artifact rather than to a checker running
+  against an older app than it expects. The workflow prints that diff.
+- `--require-stapled` is not passed, so this does not re-prove stapling.
+
+This is a backfill, not a substitute for Step 9. The ordinary path is still to
+verify before publishing.
+
 ## Step 10: Stage Final Assets, Smoke The Downloadable ZIPs, And Publish
 
 Update the release notes to reflect notarization completion and replace the draft assets with the stapled versions, including `latest-mac.yml`. Keep the release as a draft during this upload:
@@ -635,6 +669,7 @@ Primary scripts and workflows:
 
 - `.github/workflows/release.yml`
 - `.github/workflows/smoke-packaged-macos.yml`
+- `.github/workflows/verify-published-macos-dmg.yml`
 - `.github/workflows/notarize-submit.yml`
 - `.github/workflows/notarize-status.yml`
 - `scripts/release-macos-local.mjs`
