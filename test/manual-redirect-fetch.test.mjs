@@ -190,6 +190,34 @@ test("an early close followed by a real error rejects with that error", async ()
   });
 });
 
+// The composition the owner check in docs/paperclip-data-layer.md § 4 item 5
+// asks about (HAV-68): the Electron-41 ordering *and* a redirecting host. The
+// early-close test above ends in a `response`; a declined hop ends in `abort`
+// instead, and `redirected` is still unset while the early `close` passes
+// through — so this is the one path where ignoring that close has to hold open
+// a transaction that never produces a `response` at all. Up to and including
+// `v2026.10.14` this rejected ERR_CONNECTION_CLOSED at ~2 ms, before the 3xx
+// existed to report, which is why item 5's floor is `v2026.10.15`.
+test("an early close does not pre-empt a redirect that arrives later", async () => {
+  const { requests, fetchImpl } = earlyCloseHarness();
+  const pending = fetchImpl("https://vanity.havenco.xyz/api/health");
+
+  const request = requests[0];
+  assert.equal(request.closedEarly, true);
+
+  request.emit("redirect", 302, "GET", "https://paperclip.lab.havenco.xyz/api/health", {});
+  // Declining the hop makes Electron cancel the request.
+  request.emit("abort");
+
+  const result = await pending;
+  assert.equal(result.status, 302);
+  assert.equal(
+    result.headers.get("location"),
+    "https://paperclip.lab.havenco.xyz/api/health",
+  );
+  assert.equal(request.aborted, true);
+});
+
 // "Nothing answered" and "something answered and was cut off" call for
 // different repairs, and collapsing them into one sentence hid the fact that
 // the host had already been reached.

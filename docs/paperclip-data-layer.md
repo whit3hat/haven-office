@@ -281,6 +281,12 @@ strategy swap, not a redesign. But it should be confirmed before a release:
 > HAV-66. Before turning an item into a card, resolve its floor
 > (`git tag --contains <commit>`) and put the tag and the asset name in the
 > prompt. "Latest" is not a floor.
+>
+> **Re-resolve the floor at carding time, not once.** A floor written here can go
+> stale in the other direction: item 5 read `v2026.10.13` until 2026-10-22, when
+> HAV-44 found a regression that made that build answer every Verify Remote
+> identically, raising the floor to `v2026.10.15`. A recorded floor is a fact
+> about the day it was resolved, so treat it as a lead and re-run the check.
 
 1. **The cookie round trip.** With the window signed in to a remote, call
    `client.getMe()` from the main process and confirm it returns 200 rather
@@ -304,7 +310,7 @@ strategy swap, not a redesign. But it should be confirmed before a release:
    server root. This is now the only probe that carries
    `credentials: "include"`, so it is also the only place that mechanism is
    still exercised.
-5. **The redirect interaction (HAV-68).** *Floor: `v2026.10.13`.* The half of
+5. **The redirect interaction (HAV-68).** *Floor: `v2026.10.15`.* The half of
    HAV-45's Mac plan that the signed-in connect does not exercise: point Verify
    Remote at a host that redirects `/api/health` and confirm it still reports
    the redirect target, not an unreachable host. That is the one interaction
@@ -312,19 +318,39 @@ strategy swap, not a redesign. But it should be confirmed before a release:
    handling in `src/connection/manual-redirect-fetch.ts` that only Chromium can
    settle. `test/partition-probe-fetch.test.mjs` asserts our half (a
    cookie-bearing probe still resolves a declined redirect as a 3xx with its
-   `Location`).
+   `Location`), and `test/manual-redirect-fetch.test.mjs` asserts it under the
+   real Electron-41 event ordering ("an early close does not pre-empt a redirect
+   that arrives later").
 
-   **Do not bundle this with item 6** — that is what HAV-66 found. The two have
-   different floors. `manual-redirect-fetch.ts` and `partition-probe-fetch.ts`
-   are byte-identical between `v2026.10.13` and `master`, and a redirecting host
-   with no saved profile resolves to `null` and so to the same origin-hash
-   partition on both (`savedProfileIdForRemoteUrl`, `window-policy.ts`), so a
-   `v2026.10.13` answer is valid for `master`. **Pick a redirecting URL that is
-   not one of the saved remotes**; if it is, the two builds read different cookie
-   jars and the answer stops transferring.
-6. **Verify Remote on a saved profile (HAV-47).** *Floor: the first tag
-   containing `bf49cf71` — as of 2026-10-20 there is none, so this is not yet
-   answerable. HAV-67 cuts it.* Sign in to a saved remote, reopen the launcher,
+   **The floor was `v2026.10.13` until 2026-10-22 and that was wrong.** The
+   early-close regression root-caused on HAV-44 made *every* Verify Remote probe
+   reject before any response arrived, host-independently, on both published
+   builds carrying the wrapper (`v2026.10.13` and `v2026.10.14`) — so a
+   redirecting host answered "connection closed", never the redirect target, and
+   an answer from either build would have been a false fail. `2ab0b743` fixes
+   it and lands first in `v2026.10.15`; `git tag --contains 2ab0b743` is the
+   check. This is the same defect class HAV-66 caught, reached the second time
+   through a *stale* floor rather than a missing one: a floor is only true as of
+   the day it was resolved.
+
+   **Do not bundle this with item 6** — that is what HAV-66 found, and the two
+   still want separate cards even though both now floor at `v2026.10.15`. A
+   `v2026.10.15` answer transfers to `master`: `manual-redirect-fetch.ts` and
+   `partition-probe-fetch.ts` are byte-identical between that tag and `master`,
+   and a redirecting host with no saved profile resolves to `null` and so to the
+   same origin-hash partition on both (`savedProfileIdForRemoteUrl`,
+   `window-policy.ts`). Do not restate that byte-identity from memory — it held
+   for `v2026.10.13` too until `2ab0b743` broke it; re-run the `git diff --stat`
+   against the tag you are naming. **Pick a redirecting URL that is not one of
+   the saved remotes**; if it is, the two builds read different cookie jars and
+   the answer stops transferring.
+6. **Verify Remote on a saved profile (HAV-47).** *Floor: `v2026.10.15`.*
+   `bf49cf71` first ships in `v2026.10.14`, but that build cannot answer this
+   either — the item-5 early-close regression above fails the saved-profile
+   probe the same way and for the same reason, since both share the wrapper. The
+   earlier note here ("as of 2026-10-20 there is none, so this is not yet
+   answerable") is stale; HAV-67 tracks the release and HAV-47 owns the check.
+   Sign in to a saved remote, reopen the launcher,
    and press **Verify Remote** on that URL. It should report an active session,
    not "sign-in required". The fix resolves the saved profile from the typed
    URL's origin so both the probe and the window read the same partition; a Mac
