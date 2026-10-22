@@ -530,6 +530,19 @@ Two things to know before trusting a result:
 This is a backfill, not a substitute for Step 9. The ordinary path is still to
 verify before publishing.
 
+**`v2026.10.14` has been backfilled, and it passed.** Both architectures, run
+2026-10-22 13:10–13:23 UTC against the published assets:
+[arm64](https://github.com/whit3hat/haven-office/actions/runs/39784476975),
+[x64](https://github.com/whit3hat/haven-office/actions/runs/39784491888). All 13
+checks ran inside the mounted `.dmg` — including `trayTemplateIcon`,
+`localNetworkUsage` and `bundledPlugin` — and every one is byte-identical to the
+same check against the sibling `*-mac.zip`, so the two electron-builder targets
+agree. The downloaded `.dmg` digests match the release's
+(`180a3ab6b8cef132…` arm64, `7690b1be…` x64), so the artifact checked is the
+artifact a user downloads. `signed: false` on both is expected and documented in
+[`../install-runbook.md`](../install-runbook.md) — havenCo has no Developer ID
+yet, not a defect in this tag.
+
 ## Step 10: Stage Final Assets, Smoke The Downloadable ZIPs, And Publish
 
 Update the release notes to reflect notarization completion and replace the draft assets with the stapled versions, including `latest-mac.yml`. Keep the release as a draft during this upload:
