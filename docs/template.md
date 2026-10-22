@@ -325,11 +325,32 @@ So when you add a surface that can fail:
    `requests[0].init.credentials === "include"` — that the option was handed over. Whether
    Electron *honours* it, and what it does to a request that carries it, is untested by
    construction: no test here loads Electron. When `v2026.10.13` added that one option, the
-   only machine that had ever run it was the owner's Mac, and it broke **Verify Remote** for
-   the one host he needed. The fake seam is still right; the rule that comes with it is that
-   **a changed platform option is a release risk no amount of green tests reduces** — call it
-   out in the release notes and have one real-hardware check in front of it, the way
-   `docs/install-runbook.md` § 4c's install card does for the bundle.
+   only machine that had ever run it was the owner's Mac. The fake seam is still right; the
+   rule that comes with it is that **a changed platform option is a release risk no amount of
+   green tests reduces** — call it out in the release notes and have one real-hardware check in
+   front of it, the way `docs/install-runbook.md` § 4c's install card does for the bundle.
+6. **A revert is a hypothesis, and shipping it is the experiment — so let it be falsified.**
+   The option in point 5 was the prime suspect for a **Verify Remote** that failed on the
+   owner's Mac from `v2026.10.13` onward: it was the one functional change between the build
+   he said worked and the build that did not. `v2026.10.14` reverted it. **He installed that
+   build and got the identical failure**, which cleared the option and cost him a 677 MB
+   download to learn. Two checks would have ranked the suspect lower *before* cutting the tag,
+   and both are cheap:
+   - **Diff the whole build, not the suspicious part.** `git diff v2026.10.12..v2026.10.13 --
+     name-status -- src/` is two modified files. Reading both, rather than the one that matched
+     the theory, is minutes.
+   - **Ask whether the old build could produce the same message.** It could: the
+     `close`-with-no-response branch that generated the owner's exact sentence shipped in
+     `v2026.10.12` verbatim. A failure mode present in the "good" build is not evidence of a
+     regression, however well the timeline lines up — and "the previous version worked" is a
+     report about one machine on one day, not a bisect.
+
+   The standing rule: **before you hand someone a build to test a theory, state what result
+   would disprove it, and prefer any test that costs them nothing.** Here that test existed the
+   whole time — point **Verify Remote** at a plain public `https://` host and see whether it
+   fails the same way (`docs/install-runbook.md` § 8, step 1). It needs no download and it
+   separates "this app completes no request" from "this app cannot reach this host", which is
+   the fork the build never addressed.
 
 ### The pattern to copy for anything native
 

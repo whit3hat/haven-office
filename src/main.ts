@@ -1161,14 +1161,25 @@ function resolveRemoteProfileId(profileId: string | null, remoteUrl: string): st
  *   HAV-45 needs it: without the partition's cookies the probe reports a
  *   signed-in user as `signed_out`.
  *
- * v2026.10.13 used the credentialed transport for both, and it is the first
+ * v2026.10.13 used the credentialed transport for both, and it was the first
  * published build whose Verify Remote failed on the owner's Mac — at
- * `/api/health`, before any session probe ran, with Chromium closing the
- * request before a response arrived. We have no Mac and no mechanism for that
- * (Electron 41's own declarations describe no such gate), so this is not a
- * proven root cause. It is the one functional change between the build that
- * worked and the build that does not, reverted for the request that never
- * needed it and kept for the request that does.
+ * `/api/health`, before any session probe ran. That made the credentialed
+ * request the obvious suspect, and splitting the two here was the revert.
+ *
+ * It was not the cause. The owner installed v2026.10.14 on 2026-10-22 and got
+ * the identical failure (HAV-44), which clears this line: `health` above is
+ * functionally the v2026.10.12 request, and v2026.10.12 is the build he says
+ * worked. Two further facts put the whole build-regression theory to rest —
+ * the `close`-with-no-response branch that produces the message shipped in
+ * v2026.10.12 verbatim (`src/connection/manual-redirect-fetch.ts`), so the
+ * failing path is not new code; and the `ERR_CONNECTION_CLOSED` the badge now
+ * shows is synthesized by us, not reported by Chromium, so it carries no
+ * information about what the network actually did.
+ *
+ * Keep the split anyway: it is the right shape on its own merits. `/api/health`
+ * is public and never needed credentials, and a probe that cannot be cancelled
+ * by an auth challenge is strictly easier to reason about. Just do not read it
+ * as a fix for the remote-verify failure — see docs/install-runbook.md § 8.
  */
 function remoteProbeTransports(
   profileId: string | null,
