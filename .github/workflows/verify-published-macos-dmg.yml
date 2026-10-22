@@ -1,0 +1,150 @@
+name: Verify Published macOS DMG
+
+# Run the repo's own content checks against an *already published* release's
+# .dmg, without re-cutting the release.
+#
+# Why this exists: `verify-macos-release.mjs` only ever ran inside the build
+# job, against the output directory `pnpm release:mac:local` had just produced.
+# When the dmg-content check landed in 9780329c, v2026.10.14 was already
+# published, so its .dmg — the one artifact the owner actually downloads — had
+# been checked by `codesign` and nothing else. This workflow closes that by
+# pulling the published assets back onto a macOS runner and running the current
+# checker against them.
+#
+# It is safe to point at any published or draft tag: every step reads. Nothing
+# is uploaded, re-tagged, or re-published.
+#
+# The checker needs no third-party modules (it imports only node: builtins and
+# four sibling scripts), so there is no install step — checkout and node are
+# enough, and the job is download-bound.
+#
+# GitHub only registers a dispatchable workflow after the file changes on the
+# default branch; see the same note in smoke-packaged-macos.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Draft or published GitHub release tag whose .dmg should be checked
+        required: true
+      arch:
+        description: macOS architecture to verify
+        required: true
+        default: arm64
+        type: choice
+        options:
+          - arm64
+          - x64
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify ${{ github.event.inputs.arch }} published .dmg
+    runs-on: ${{ github.event.inputs.arch == 'arm64' && 'macos-15' || 'macos-15-intel' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Download the .dmg and its sibling *-mac.zip into one flat directory.
+      #
+      # The .dmg alone is not enough to run the checker: verify-macos-release.mjs
+      # asserts the output directory holds an .app bundle, a .dmg and a .zip,
+      # the three things a real build leaves behind, and refuses to run if any
+      # is missing. Extracting the .zip in place supplies the .app, which also
+      # means the run cross-checks the dmg's contents against the zip's rather
+      # than assuming (as the repo did until 9780329c) that they match.
+      - name: Download published macOS assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_ARCH: ${{ github.event.inputs.arch }}
+        run: |
+          set -euo pipefail
+          out_dir="release/published-$RELEASE_ARCH"
+          mkdir -p "$out_dir"
+          echo "OUT_DIR=$out_dir" >> "$GITHUB_ENV"
+
+          release_id="$(
+            gh api --paginate "repos/${{ github.repository }}/releases?per_page=100" \
+              --jq '.[] | select(.tag_name == env.RELEASE_TAG) | .id' | head -n 1
+          )"
+          if [ -z "$release_id" ]; then
+            echo "Draft or published release not found: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          # arm64 assets carry "arm64" in the name; x64 assets are the ones that
+          # do not. Matching on absence is why this is a case over every asset
+          # rather than a single glob. Each test is an `if`, not a `[ … ] && …`
+          # one-liner: under `set -e` a failing `&&` list is the case branch's
+          # exit status, which would abort the loop on the first asset belonging
+          # to the other architecture.
+          while IFS=$'\t' read -r asset_id asset_name; do
+            asset_arch=x64
+            case "$asset_name" in
+              *arm64*) asset_arch=arm64 ;;
+            esac
+
+            keep=no
+            case "$asset_name" in
+              *.dmg|*-mac.zip)
+                if [ "$asset_arch" = "$RELEASE_ARCH" ]; then
+                  keep=yes
+                fi
+                ;;
+            esac
+
+            if [ "$keep" = "yes" ]; then
+              echo "Downloading $asset_name"
+              gh api "repos/${{ github.repository }}/releases/assets/$asset_id" \
+                -H 'Accept: application/octet-stream' > "$out_dir/$asset_name"
+            fi
+          done < <(
+            gh api --paginate "repos/${{ github.repository }}/releases/$release_id/assets?per_page=100" \
+              --jq '.[] | [.id, .name] | @tsv'
+          )
+
+          dmg_path="$(find "$out_dir" -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+          zip_path="$(find "$out_dir" -maxdepth 1 -type f -name '*-mac.zip' | head -n 1)"
+          if [ -z "$dmg_path" ] || [ -z "$zip_path" ]; then
+            echo "Expected one .dmg and one *-mac.zip for $RELEASE_ARCH under $out_dir:" >&2
+            ls -l "$out_dir" >&2
+            exit 1
+          fi
+
+          shasum -a 256 "$dmg_path" "$zip_path"
+          ditto -x -k "$zip_path" "$out_dir"
+
+      # The checker is whatever the default branch currently holds, which is the
+      # point: it is newer than the tag being checked. Confirm nothing under
+      # src/ differs between the two, so a failure here is about the artifact
+      # and not about a checker running against an older app than it expects.
+      - name: Confirm the checker is newer than the tag but the app is not
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" || true
+          echo "Checker HEAD: $(git rev-parse --short HEAD)"
+          echo "Files differing between $RELEASE_TAG and this checkout:"
+          git diff --name-only "refs/tags/$RELEASE_TAG" HEAD || true
+
+      - name: Verify the published artifacts
+        env:
+          APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: node scripts/verify-macos-release.mjs "$OUT_DIR"
+
+      # Uploaded on success and failure alike, for the same reason
+      # smoke-packaged-macos.yml does it: the interesting detail is the part a
+      # failure message summarises away.
+      - name: Upload verification summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-summary-${{ github.event.inputs.arch }}-${{ github.event.inputs.tag }}
+          path: ${{ env.OUT_DIR }}/verification-summary.json
+          if-no-files-found: warn
+          retention-days: 14
