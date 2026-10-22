@@ -160,10 +160,13 @@ const LOCAL_NETWORK_DENIED_ERROR_CODES = [
  * candidates have nothing to do with each other, so the hint names all three.
  *
  * `ECONNRESET` is undici's spelling ("socket hang up"); the `ERR_*` spellings
- * are Chromium's, which is what the session-backed probe reports;
- * `ERR_CONNECTION_CLOSED` and `ERR_RESPONSE_INCOMPLETE` are synthesized by
- * src/connection/manual-redirect-fetch.ts for an Electron transaction that
- * ended with no response and one cut off mid-body respectively.
+ * are Chromium's, which is what the session-backed probe reports.
+ * `ERR_RESPONSE_INCOMPLETE` is synthesized by
+ * src/connection/manual-redirect-fetch.ts for an Electron response that was cut
+ * off mid-body; `ERR_CONNECTION_CLOSED` is kept here because Chromium itself
+ * reports it. The wrapper no longer synthesizes it: a bare Electron `close`
+ * fires synchronously at `request.end()`, before any response, so it is not a
+ * failure signal (HAV-44, Electron 41.10.7).
  */
 const CONNECTION_CLOSED_ERROR_CODES = [
   "ECONNRESET",

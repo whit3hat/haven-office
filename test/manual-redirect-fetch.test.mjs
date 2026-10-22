@@ -137,22 +137,55 @@ test("a genuine transport error rejects with that error", async () => {
   await assert.rejects(pending, /ERR_CERT_AUTHORITY_INVALID/);
 });
 
-// The owner hit exactly this on v2026.10.13 and the badge read "Request to
-// https://paperclip.lab.havenco.xyz/api/health closed before a response
-// arrived." — no code, so src/paperclip/transport.ts could attach no hint and
-// nothing in the sentence named a repair. A synthesized error has to carry a
-// code for the same reason a forwarded one does.
-test("closing before any response rejects with a code the diagnostics can map", async () => {
-  const { requests, fetchImpl } = harness();
+// The regression the owner reproduced in Electron 41.10.7 on 2026-10-22
+// (HAV-44). `ClientRequest` emits `finish` then `close` synchronously the
+// instant `end()` is called — on the writable side, before any network
+// activity — and the real `response` follows ~250 ms later. The old wrapper
+// settled ERR_CONNECTION_CLOSED on that early `close` and discarded the HTTP
+// 200 that was already on its way, so every build carrying this wrapper failed
+// Verify Remote for every host, identically. The probe must survive the early
+// close and resolve with the response.
+test("an early synchronous close does not pre-empt the response that follows", async () => {
+  const { requests, fetchImpl } = earlyCloseHarness();
+
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health", {
+    method: "GET",
+    headers: { accept: "application/json" },
+  });
+
+  const request = requests[0];
+  // `end()` has already emitted `finish` + `close` synchronously by now.
+  assert.equal(request.ended, true);
+  assert.equal(request.closedEarly, true);
+
+  const response = fakeResponse({
+    statusCode: 200,
+    statusMessage: "OK",
+    headers: { "content-type": "application/json" },
+  });
+  request.emit("response", response);
+  response.emit("data", Buffer.from('{"status":"ok"}'));
+  response.emit("end");
+
+  const result = await pending;
+  assert.equal(result.status, 200);
+  assert.deepEqual(await result.json(), { status: "ok" });
+});
+
+// A bare `close` is not a result on its own. When the transaction genuinely
+// fails, Electron follows that early close with an `error` carrying a Chromium
+// code, and that forwarded error — not a sentence this wrapper invents — is
+// what reaches the user and the diagnostics.
+test("an early close followed by a real error rejects with that error", async () => {
+  const { requests, fetchImpl } = earlyCloseHarness();
   const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
 
-  requests[0].emit("close");
+  requests[0].emit("error", Object.assign(new Error("net::ERR_CONNECTION_REFUSED"), {
+    code: "ERR_CONNECTION_REFUSED",
+  }));
 
   await assert.rejects(pending, (error) => {
-    assert.equal(error.code, "ERR_CONNECTION_CLOSED");
-    assert.match(error.message, /ended before any HTTP response arrived/);
-    // The host, not this wrapper's internals, is what the reader can act on.
-    assert.match(error.message, /paperclip\.lab\.havenco\.xyz/);
+    assert.equal(error.code, "ERR_CONNECTION_REFUSED");
     return true;
   });
 });
@@ -273,6 +306,31 @@ test("repeated response headers are joined rather than dropped", async () => {
   assert.equal(result.headers.get("x-trace"), "a, b");
   assert.equal(result.headers.get("x-empty"), null);
 });
+
+/**
+ * A harness whose `end()` emits `finish` then `close` synchronously, the way
+ * Electron 41's ClientRequest does — the behaviour that produced the HAV-44
+ * regression. `closedEarly` records that the close fired before any response.
+ */
+function earlyCloseHarness() {
+  const requests = [];
+  const fetchImpl = createManualRedirectFetch({
+    createRequest: (init) => {
+      const request = new FakeRequest();
+      request.init = init;
+      request.closedEarly = false;
+      request.end = function end() {
+        this.ended = true;
+        this.emit("finish");
+        this.closedEarly = true;
+        this.emit("close");
+      };
+      requests.push(request);
+      return request;
+    },
+  });
+  return { requests, fetchImpl };
+}
 
 function createBoundedHarness(maxBodyBytes) {
   const requests = [];

@@ -256,31 +256,39 @@ export function createManualRedirectFetch(options: ManualRedirectFetchOptions): 
         );
       });
 
-      // `close` is documented as the last event of the transaction, and
-      // Electron's own docs say an `error` is "typically" followed by one — so
-      // reaching this handler unsettled means Electron reported neither a
-      // response nor a network error. The transaction simply ended. That is the
-      // least informative thing the stack can do to us, which is exactly why
-      // the message has to name a code and a target rather than describe this
-      // wrapper's internals.
+      // `close` is NOT the last event of an Electron 41 transaction, despite
+      // what the docs imply. `ClientRequest` emits `finish` then `close`
+      // synchronously the instant `request.end()` runs — on the *writable* side,
+      // before any network activity — and the `response` follows ~250 ms later.
+      // Reproduced in Electron 41.10.7 (Chromium 146) on the owner's Mac,
+      // HAV-44, 2026-10-22: a probe that settled on bare `close` rejected
+      // ERR_CONNECTION_CLOSED at 2 ms and discarded the real HTTP 200 that
+      // arrived at 253 ms — host-independent, which is why the lab host and
+      // example.com failed identically and nothing on the network ever mattered.
+      //
+      // So `close` is only a result in two cases: a captured redirect, or a
+      // response that had already started and was cut off before its body ended
+      // (ERR_RESPONSE_INCOMPLETE). A bare `close` with nothing received yet is
+      // ignored; the real terminal event — `response`→`end`, `error`, or
+      // `abort` — still follows, and the caller's abort timeout
+      // (fetchWithTimeout, src/paperclip/transport.ts) is the guaranteed
+      // backstop for a transaction that truly produces nothing.
       request.on("close", () => {
         if (resolveRedirect()) {
           return;
         }
-        const target = describeTarget(url);
-        settle(() =>
-          reject(
-            responded
-              ? transportError(
-                `${target} sent HTTP ${responded.status} but the connection closed before the response body finished.`,
+        if (responded) {
+          const started = responded;
+          const target = describeTarget(url);
+          settle(() =>
+            reject(
+              transportError(
+                `${target} sent HTTP ${started.status} but the connection closed before the response body finished.`,
                 "ERR_RESPONSE_INCOMPLETE",
-              )
-              : transportError(
-                `The connection to ${target} ended before any HTTP response arrived.`,
-                "ERR_CONNECTION_CLOSED",
               ),
-          ),
-        );
+            ),
+          );
+        }
       });
 
       request.end();
