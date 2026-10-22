@@ -378,6 +378,37 @@ for (const dmgPath of dmgArtifacts) {
       .trim();
   }
 
+  // Look *inside* the .dmg, not just at its signature. The .dmg is the only
+  // artifact the owner ever downloads, and until this it was the only one of
+  // the three whose contents nothing checked: collectChecks ran on the raw
+  // .app and on the .app inside each .zip, while the dmg got codesign and
+  // nothing else. The packaged smoke test does not close the gap either — it
+  // extracts the *-mac.zip. So every content assertion we own was proving
+  // something about an artifact nobody installs.
+  //
+  // dmg and zip are two targets of one electron-builder mac config, so in
+  // practice they wrap the same .app. "In practice they're the same" is
+  // exactly the assumption that shipped two defects already: the bundled
+  // plugin missing through v2026.10.7 and trayTemplate missing from
+  // v2026.10.13, both because a second config path did not copy a file the
+  // source referenced. Assert it instead of trusting it.
+  const mountPoint = mkdtempSync(join(tmpdir(), "paperclip-dmg-verify-"));
+  try {
+    run("hdiutil", ["attach", dmgPath, "-nobrowse", "-readonly", "-mountpoint", mountPoint]);
+    const mountedApp =
+      walk(mountPoint).find((candidate) => candidate.endsWith(".app") && !candidate.includes("/Contents/Frameworks/")) ||
+      null;
+    if (!mountedApp) {
+      throw new Error(`No .app bundle found inside ${dmgPath}`);
+    }
+
+    entry.mountedApp = basename(mountedApp);
+    entry.checks = collectChecks(mountedApp);
+  } finally {
+    tryRun("hdiutil", ["detach", mountPoint, "-force"]);
+    rmSync(mountPoint, { recursive: true, force: true });
+  }
+
   verification.dmgArtifacts.push(entry);
 }
 

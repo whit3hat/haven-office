@@ -394,6 +394,30 @@ from a checkout with **no install and no build**, so nothing there may import fr
 which is why the one string shared with `src/` (`TRAY_READY_PREFIX`) is duplicated and guarded
 by a test rather than imported.
 
+#### Check the artifact the user installs, not a sibling of it
+
+A corollary, and it had gone unnoticed in this repo until 2026-10-22. The macOS config emits
+**two** artifacts per arch from one `.app` — a `.dmg` and a `.zip` — and the checks had drifted
+onto the wrong one:
+
+| artifact | who consumes it | what verified its *contents*, before |
+| --- | --- | --- |
+| the staged `.app` | nothing — an intermediate | `collectChecks()` |
+| `*-mac.zip` | the updater, and the packaged smoke job | `collectChecks()`, and the smoke test, which extracts this |
+| **`*.dmg`** | **the owner — the only artifact a human ever downloads** | **`codesign` only; nothing looked inside** |
+
+Every content assertion the repo owned was proving something true of an artifact nobody
+installs. The two targets do come from one electron-builder config over one staged tree, so in
+practice they wrap the same `.app` — but "in practice they're the same" is precisely the
+assumption behind both failures listed above. `verify-macos-release.mjs` now mounts each `.dmg`
+read-only and runs the same `collectChecks()` against the bundle inside it.
+
+The general rule, worth applying to any packaging target you add: **enumerate every artifact
+you publish and name what verifies each one's contents.** A build that emits more artifact
+kinds than your verifier knows about will quietly ship the one you forgot, and the one you
+forget is disproportionately likely to be the one humans use — intermediates and
+machine-consumed artifacts are the ones already wired into tooling.
+
 ---
 
 ## Related documents
