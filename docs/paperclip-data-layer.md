@@ -333,8 +333,10 @@ strategy swap, not a redesign. But it should be confirmed before a release:
    through a *stale* floor rather than a missing one: a floor is only true as of
    the day it was resolved.
 
-   **Do not bundle this with item 6** — that is what HAV-66 found, and the two
-   still want separate cards even though both now floor at `v2026.10.15`. A
+   **Do not bundle this with item 6** — that is what HAV-66 found. Moot in
+   practice now that item 6 is closed and wants no card, but the rule it stands
+   on is not: never put an answerable check and a release-gated one on the same
+   card, or the gated half strands the answerable half. A
    `v2026.10.15` answer transfers to `master`: `manual-redirect-fetch.ts` and
    `partition-probe-fetch.ts` are byte-identical between that tag and `master`,
    and a redirecting host with no saved profile resolves to `null` and so to the
@@ -344,21 +346,41 @@ strategy swap, not a redesign. But it should be confirmed before a release:
    against the tag you are naming. **Pick a redirecting URL that is not one of
    the saved remotes**; if it is, the two builds read different cookie jars and
    the answer stops transferring.
-6. **Verify Remote on a saved profile (HAV-47).** *Floor: `v2026.10.15`.*
-   `bf49cf71` first ships in `v2026.10.14`, but that build cannot answer this
-   either — the item-5 early-close regression above fails the saved-profile
-   probe the same way and for the same reason, since both share the wrapper. The
-   earlier note here ("as of 2026-10-20 there is none, so this is not yet
-   answerable") is stale; HAV-67 tracks the release and HAV-47 owns the check.
-   Sign in to a saved remote, reopen the launcher,
-   and press **Verify Remote** on that URL. It should report an active session,
-   not "sign-in required". The fix resolves the saved profile from the typed
-   URL's origin so both the probe and the window read the same partition; a Mac
-   is what proves the partition it now picks is the one Chromium actually stored
-   the cookie in. `test/window-policy.test.mjs` asserts the selection itself.
+6. **Verify Remote on a saved profile (HAV-47) — shipped and exercised. No
+   longer an open check; do not raise a card for it.** *Floor: `v2026.10.15`.
+   Shipped `v2026.10.14`, exercised by the owner on `v2026.10.15`,
+   2026-10-22.* `bf49cf71` resolves the saved profile from the typed URL's
+   origin so the probe and the window read the same partition
+   (`resolveRemoteProfileId`, used by both `launcher:verify-remote` and
+   `bootRemote`). It first ships in `v2026.10.14`, but that build cannot
+   demonstrate it — the item-5 early-close regression above fails the
+   saved-profile probe the same way and for the same reason, since both share
+   the wrapper. `v2026.10.15` is the first build on which this behaviour is
+   reachable at all.
 
-   On any build without `bf49cf71` this check reports "sign-in required" by
-   construction. That is the bug, not a verdict on the fix.
+   **The owner ran Verify Remote on `v2026.10.15` and it passed** — HAV-44 card
+   `4dcd740f`, item `remote`, verdict `approve`, 2026-10-22 22:25Z, the round
+   that closed Phase 2.
+
+   **What that answer does not separate.** That card's pass condition accepted
+   *either* a green badge *or* an amber "Verified remote - sign-in required"
+   followed by a sign-in, so the `approve` proves the probe completes and does
+   not pin down which badge a saved, already-signed-in profile draws. Both
+   outcomes carry `success: true` and leave **Connect Remote** clickable
+   (`badgeClass: "warning"`, `actionLabel: "Connect Remote"` —
+   `launcher-html.ts`, confirmed against the tag), so the residue costs the
+   owner nothing and is left to self-prove: his next connect to the saved lab
+   profile answers it for free, green or amber.
+
+   **The symptom to report if it ever reappears:** an amber
+   "Verified remote - sign-in required" on a remote that is **saved** and that
+   you are **already signed in to**. On a build carrying `bf49cf71` that is the
+   partition asymmetry coming back, and it wants a fresh issue rather than a
+   reopen of this item. On any build without `bf49cf71` it is the original bug
+   reported here, not a verdict on the fix.
+   `test/window-policy.test.mjs` asserts the selection itself ("a typed URL
+   adopts the saved profile that owns its origin", "two profiles on one origin
+   own nothing between them").
 
 ## 5. Module layout
 
