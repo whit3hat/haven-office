@@ -362,7 +362,7 @@ to watch the window open. If any of the seven below is wrong, say so on the issu
 | 3 | Press **`Cmd+1`**, then **`Cmd+2`** | `Cmd+1` → the office (`/HAV/office`); `Cmd+2` → the board (`/HAV/issues`). Both are also in the **View** menu, which is the thing to try if a shortcut is swallowed by the page |
 | 4 | Switch to **Board**, quit with `Cmd+Q`, reopen the app | It reopens on the **board**, not the office — the last view is remembered. Switch back to Office, quit, reopen, and it should come back on the office |
 | 5 | Look at the **menu bar**, top right, once the window has opened | A small monochrome icon is there, and clicking it opens a menu. If there is a number next to the icon it should match what the board says needs attention — see § 4d |
-| 6 | **The notification prompt.** Expect macOS to ask *"“Haven Office” Would Like to Send You Notifications"* at some point during the first launch | Choose **Allow**. If you chose *Don't Allow* — or never saw the prompt — that is recoverable and § 4d says how. Tell us which happened either way; a prompt that never appears is itself a finding |
+| 6 | **The notification prompt** — *"“Haven Office” Would Like to Send You Notifications"*. It does **not** appear at launch. macOS raises it only the first time the app actually *posts* a notification, which needs a brand-new attention item to appear **while the app is open** (items already waiting when it started are silent by design — § 4d). So on a quiet board, or a short check, **no prompt is the expected result, not a failure.** | When it does appear, choose **Allow**. To make it appear on demand: leave the app open and connected, then cause a new item to land for you. If you chose *Don't Allow*, § 4d says how to re-grant. Verified on 2026-10-22: no prompt during the owner's session, because nothing new arrived — expected |
 | 7 | Open the menu-bar menu and click one of the items listed at the top (if any are) | The main window comes forward on **that** task's page — not the board root, not a new window. If nothing needs attention the menu says *"Nothing needs attention"* instead, which is the correct empty state, not a failure |
 
 Rows 5–7 have never run on a Mac either, and for a sharper reason than rows 1–4: **three
@@ -439,11 +439,14 @@ want:
 
 #### The macOS notification permission prompt
 
-**On the first launch, macOS will ask once:** a system alert titled *"“Haven Office” Would Like
-to Send You Notifications"*, with **Don't Allow** and **Allow**. It comes from macOS, not from
-the app, and it can appear a few seconds *after* the main window — so it may land on top of the
-office view rather than during startup. There is no way to ask for it earlier or to explain it
-first; macOS shows it the first time the app tries to post a notification.
+**macOS asks once — but not at launch.** A system alert titled *"“Haven Office” Would Like
+to Send You Notifications"*, with **Don't Allow** and **Allow**, comes from macOS, not from
+the app. It appears the first time the app actually **posts** a notification — and the app posts
+one only when a *new* attention item appears while it is open (every item already waiting when
+it started is silent by design — see the dedupe rule below). There is no launch-time prompt and
+no way to ask for it earlier: on a quiet board or a short session you will simply never see it,
+which is expected, not a fault. To surface it deliberately, leave the app open and connected
+until a new item lands for you.
 
 Choose **Allow** for row 6 of § 4c.
 
