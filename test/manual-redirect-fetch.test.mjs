@@ -391,14 +391,17 @@ test("an ignored early close is named in the trace rather than passed over", asy
 
   assert.deepEqual(events(lines), [
     "GET paperclip.lab.havenco.xyz/api/health start",
-    "close responded=no redirected=no",
-    "close ignored reason=nothing-received-yet awaiting=response|error|abort",
+    "close responded=no redirected=no ignored reason=nothing-received-yet awaiting=response|error|abort",
     "response status=200 content-type=application/json",
     "response.end bytes=15",
     "settle resolve status=200 reason=response-end",
   ]);
   // A survived close is not trouble, so it must not be logged as trouble.
   assert.deepEqual(lines.filter((line) => line.level === "warn"), []);
+  // One event, one line. The verdict is decided by the two facts already on the
+  // line, so a second line carried no new information and was a third of the
+  // volume of a healthy attempt.
+  assert.equal(lines.filter((line) => line.message.includes(" close ")).length, 1);
 });
 
 test("a failure logs Chromium's own code and settles at warn level", async () => {
@@ -410,13 +413,43 @@ test("a failure logs Chromium's own code and settles at warn level", async () =>
   }));
   await assert.rejects(pending);
 
+  // The code is on the settle line as well as the event line: the runbook sends
+  // a reader to `[warn]` to find the failure, and `transport-error` is one of
+  // the two reasons that forward a real Chromium code rather than a synthesized
+  // one — so grepping the level alone has to yield the code too.
   assert.deepEqual(events(lines).slice(-2), [
     "error code=ERR_CONNECTION_REFUSED name=Error message=net::ERR_CONNECTION_REFUSED",
-    "settle reject reason=transport-error",
+    "settle reject reason=transport-error code=ERR_CONNECTION_REFUSED name=Error message=net::ERR_CONNECTION_REFUSED",
   ]);
   assert.deepEqual(
     lines.filter((line) => line.level === "warn").map((line) => event(line)),
-    ["settle reject reason=transport-error"],
+    [
+      "settle reject reason=transport-error code=ERR_CONNECTION_REFUSED name=Error message=net::ERR_CONNECTION_REFUSED",
+    ],
+  );
+});
+
+// The other reason that forwards a real code rather than inventing one.
+test("a response stream failure settles with the code, not just the category", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  const response = fakeResponse({ statusCode: 200, headers: {} });
+  requests[0].emit("response", response);
+  response.emit(
+    "error",
+    Object.assign(new Error("net::ERR_INCOMPLETE_CHUNKED_ENCODING"), {
+      code: "ERR_INCOMPLETE_CHUNKED_ENCODING",
+    }),
+  );
+  await assert.rejects(pending);
+
+  assert.deepEqual(
+    lines.filter((line) => line.level === "warn").map((line) => event(line)),
+    [
+      "settle reject reason=response-stream-error code=ERR_INCOMPLETE_CHUNKED_ENCODING" +
+        " name=Error message=net::ERR_INCOMPLETE_CHUNKED_ENCODING",
+    ],
   );
 });
 
@@ -494,6 +527,138 @@ test("a query string embedded in an error message is scrubbed", async () => {
   const trace = lines.map((line) => line.message).join("\n");
   assert.doesNotMatch(trace, /sekret/);
   assert.ok(trace.includes("message=failed loading https://paperclip.lab.havenco.xyz/api/health?<redacted>"));
+});
+
+// A `Location` has none of the probed URL's guarantees — validate.ts pins the
+// URL the user typed, not where a server chooses to send us next — and a token
+// in a *path* is the normal shape for Cloudflare Access, signed URLs and
+// `/s/<token>` share links. Reported by Friday reviewing haven-office#8.
+test("a redirect location keeps only its first path segment", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit(
+    "redirect",
+    302,
+    "GET",
+    "https://sso.havenco.xyz/cdn-cgi/access/login/eyJhbGciOiJIUzI1NiJ9.MY-REAL-JWT/callback",
+    {},
+  );
+  requests[0].emit("error", new Error("net::ERR_ABORTED"));
+  await pending;
+
+  const trace = lines.map((line) => line.message).join("\n");
+  assert.doesNotMatch(trace, /eyJhbGciOiJIUzI1NiJ9|MY-REAL-JWT/);
+  // Still says the hop left our host and roughly where to, which is the whole
+  // diagnostic value of the line.
+  assert.ok(
+    events(lines).includes(
+      "redirect status=302 location=sso.havenco.xyz/cdn-cgi/<redacted> followed=no",
+    ),
+  );
+});
+
+test("a redirect location that is one long opaque segment is capped", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit("redirect", 302, "GET", `https://sso.havenco.xyz/${"s".repeat(400)}`, {});
+  requests[0].emit("error", new Error("net::ERR_ABORTED"));
+  await pending;
+
+  const redirectLine = lines.find((line) => line.message.includes(" redirect "));
+  assert.ok(redirectLine.message.includes("<truncated, 400 chars>"));
+  assert.ok(redirectLine.message.length < 200);
+});
+
+// Three faults in one, and all three matter: a newline breaks the one-line-per
+// -event contract the runbook teaches, `grep '[verify-remote]'` silently loses
+// the continuation lines, and `\S*` stops at whitespace so a query after a
+// newline was only half scrubbed.
+test("a multi-line error message is flattened to one line, scrubbed throughout", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit(
+    "error",
+    new Error("proxy said:\nAuthorization: Bearer leaked-token\nvia /login?token=sekret\nend"),
+  );
+  await assert.rejects(pending);
+
+  const trace = lines.map((line) => line.message).join("\n");
+  assert.doesNotMatch(trace, /sekret/);
+  // A gateway that quotes the request it rejected would otherwise put the
+  // request's own Authorization header in the log. Best effort, not a
+  // guarantee — free text from a remote host cannot be proven clean — which is
+  // why the cap exists and why the runbook calls a credential-shaped trace line
+  // a security finding.
+  assert.doesNotMatch(trace, /leaked-token/);
+  assert.ok(lines.every((line) => !line.message.includes("\n")));
+  assert.ok(
+    trace.includes(
+      "message=proxy said: Authorization: Bearer <redacted> via /login?<redacted>",
+    ),
+  );
+});
+
+test("an unbounded error message is capped with its true length", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit("error", new Error("x".repeat(5000)));
+  await assert.rejects(pending);
+
+  const errorLine = lines.find((line) => line.message.includes(" error "));
+  assert.ok(errorLine.message.includes("<truncated, 5000 chars>"));
+  assert.ok(errorLine.message.length < 300);
+});
+
+// Not reachable from the typed URL — validate.ts rejects userinfo outright — so
+// this is defence in depth for a string the *server* writes.
+test("userinfo inside an error message is stripped", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit("error", new Error("redirected to https://alice:hunter2@sso.havenco.xyz/login"));
+  await assert.rejects(pending);
+
+  const trace = lines.map((line) => line.message).join("\n");
+  assert.doesNotMatch(trace, /hunter2|alice/);
+  assert.ok(trace.includes("https://<redacted>@sso.havenco.xyz/login"));
+});
+
+// `content-type` cannot carry a credential by definition, but it can carry
+// several hundred characters of whatever a captive portal feels like emitting.
+test("an oversized content-type is capped rather than printed in full", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  const response = fakeResponse({
+    statusCode: 200,
+    headers: { "content-type": `text/html; portal-session=${"A".repeat(400)}` },
+  });
+  requests[0].emit("response", response);
+  response.emit("end");
+  await pending;
+
+  const responseLine = lines.find((line) => line.message.includes(" response status="));
+  assert.ok(responseLine.message.includes("content-type=text/html; portal-session=A"));
+  assert.ok(responseLine.message.includes("chars>"));
+  assert.ok(responseLine.message.length < 200);
+});
+
+// The runbook teaches `code=… name=… message=…`; the shape has to hold even when
+// the network stack throws something that is not an Error.
+test("a non-Error failure still logs the three fields the runbook teaches", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit("error", "net::ERR_FAILED");
+  await assert.rejects(pending);
+
+  assert.ok(
+    events(lines).includes("error code=<none> name=<not-an-error> message=net::ERR_FAILED"),
+  );
 });
 
 test("a close after a response started is reported as mid-body, with the status", async () => {

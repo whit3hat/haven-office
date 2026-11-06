@@ -1087,8 +1087,7 @@ Grep for `[verify-remote]`. Each attempt looks like this — the healthy case:
 
 ```
 [verify-remote] #1 health GET paperclip.lab.havenco.xyz/api/health start
-[verify-remote] #1 health +2ms close responded=no redirected=no
-[verify-remote] #1 health +2ms close ignored reason=nothing-received-yet awaiting=response|error|abort
+[verify-remote] #1 health +2ms close responded=no redirected=no ignored reason=nothing-received-yet awaiting=response|error|abort
 [verify-remote] #1 health +253ms response status=200 content-type=application/json
 [verify-remote] #1 health +254ms response.end bytes=47
 [verify-remote] #1 health +254ms settle resolve status=200 reason=response-end
@@ -1098,32 +1097,75 @@ How to read it:
 
 - **`#N`** correlates one attempt's lines. **`health`** or **`session`** says which of the two
   probes spoke (`/api/health` and `/api/auth/get-session`), because they run against the same
-  host and interleave.
-- **`+NNNms`** is elapsed from `request.end()`. This is the field that matters and the reason
-  the wall-clock stamp `electron-log` prepends is not enough: the whole `v2026.10.15` bug is a
-  `close` at **+2 ms** and a `response` at **+253 ms**, and nothing distinguishes those at
-  one-second resolution. **A `close responded=no` followed by a `response` is normal** — that is
-  Electron 41's writable-side close, and the two `close` lines above are what a healthy attempt
+  host and interleave. The counter **restarts at 1 each time the app launches** while this file
+  is appended to across launches, so one `main.log` can hold several unrelated `#1 health`
+  attempts — the wall-clock stamp `electron-log` prepends is what separates them.
+- **`+NNNms`** is elapsed from **entry into the probe transport** — earlier than
+  `request.end()`, so request construction and header wiring are inside it. This is the field
+  that matters and the reason the wall-clock stamp is not enough: the whole `v2026.10.15` bug is
+  a `close` at **+2 ms** and a `response` at **+253 ms**, and nothing distinguishes those at
+  one-second resolution. **A `close responded=no … ignored` followed by a `response` is normal**
+  — that is Electron 41's writable-side close, and the line above is what a healthy attempt
   looks like, not a fault.
 - **`error code=…`** is Chromium's own code, forwarded, not ours. This is the single most useful
   line in the file. **`code=<none>`** is itself a finding: it means the user got a bare sentence
-  with no repair attached, because `describeFetchError` keys every hint off that code.
+  with no repair attached, because `describeFetchError` keys every hint off that code. The same
+  `code= name= message=` triple appears on the `settle` line for the two reject reasons that
+  forward a real code (`transport-error`, `response-stream-error`), so grepping `[warn]` alone
+  is enough.
 - **`settle …`** is the decision and its reason — `resolve` with a status, or `reject` with one of
   `transport-error`, `closed-mid-body`, `request-aborted`, `aborted-by-caller`,
   `signal-already-aborted`, `response-stream-error`, `body-too-large`, `create-request-threw`.
   Exactly one `settle` line per attempt. A failed attempt logs at **`[warn]`**, so the levels
-  alone find it.
+  alone find it. **Lines can appear after it** — see the declined-redirect case below — because
+  the transport keeps narrating events the network stack is still emitting after the result is
+  decided.
 - **No `settle` line at all** means the attempt never finished — which the 8 s abort timeout
   should have turned into `aborted-by-caller`. That combination is a new defect; report it with
   the lines quoted.
+- **`settle reject reason=signal-already-aborted` at `+0ms`** means the caller's timeout had
+  already expired before the transport started. For the `session` probe that usually means it
+  expired during the partition cookie-jar read, which happens before this clock starts and is
+  deliberately not logged (the jar is definitionally a credential).
 
-**What it deliberately does not contain.** URLs are reduced to host and path, with any query
-string replaced by `?<redacted>`; a bare `?<redacted>` marker tells you a query was present.
-Request headers, cookies, the cookie jar, response headers other than `content-type`, and
-response bodies are never written — only a body **byte count**. The probed URL is typed by a
-user and `main.log` is a file people paste into issues, so a token must not be able to travel
-either way. If you find anything credential-shaped in a `[verify-remote]` line, that is a
-security finding, not a logging bug.
+**A declined redirect logs an `error` and an `abort` that are not faults.** This is the healthy
+path for any SSO-fronted remote, so it is worth recognising:
+
+```
+[verify-remote] #3 health GET paperclip.lab.havenco.xyz/api/health start
+[verify-remote] #3 health +43ms redirect status=302 location=sso.havenco.xyz/cdn-cgi/<redacted> followed=no
+[verify-remote] #3 health +43ms abort
+[verify-remote] #3 health +43ms settle resolve status=302 reason=captured-redirect
+[verify-remote] #3 health +44ms error code=ERR_ABORTED name=Error message=net::ERR_ABORTED
+[verify-remote] #3 health +44ms close responded=no redirected=HTTP 302
+```
+
+`followed=no` means the probe deliberately declined the hop, which cancels the request — so the
+`abort` and the `ERR_ABORTED` after it are **self-inflicted and expected**, and they arrive
+after the `settle` line that already resolved. Read the `settle` line, not the last line.
+
+**What it deliberately does not contain.** Nothing logged can carry a credential, and the rule
+follows who controls the string:
+
+- **The probed URL** keeps its host and path, with any query replaced by `?<redacted>` — a bare
+  marker tells you a query was present. That is safe only because `src/connection/validate.ts`
+  pins it to a fixed same-origin path and rejects userinfo before the transport sees it.
+- **A redirect `location`** gets no such guarantee from the server, and tokens sit in paths as
+  often as in queries (Cloudflare Access, signed URLs, `/s/<token>` share links). So it keeps
+  the host and **only the first path segment**: `sso.havenco.xyz/cdn-cgi/<redacted>`. That still
+  says the hop left your host and roughly where to, which is all the diagnosis needs.
+- **`message=` and `content-type=`** are unbounded free text the server writes. Both are
+  collapsed to a single line, stripped of any `//user:pass@` and of any credential after a
+  `Bearer`/`Basic` scheme, cut from the first `?` or `#`, and capped — a
+  `<truncated, N chars>` marker gives the true length. One event is always one line, so
+  `grep '[verify-remote]'` cannot lose part of a trace. **These two fields are best effort:**
+  text a remote host wrote cannot be proven credential-free by pattern, which is why they are
+  capped and why the paragraph below applies to them first.
+- **Request headers, cookies, the cookie jar, response headers other than `content-type`, and
+  response bodies** are never written at all — a body is only a **byte count**.
+
+`main.log` is a file people paste into issues. If you find anything credential-shaped in a
+`[verify-remote]` line, that is a security finding, not a logging bug.
 
 **No `[verify-remote]` lines at all** means a build at or before `v2026.10.15`, which is every
 published build as of 2026-10-22. Upgrade before investigating a Verify Remote failure any
