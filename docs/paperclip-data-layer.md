@@ -287,6 +287,15 @@ strategy swap, not a redesign. But it should be confirmed before a release:
 > HAV-44 found a regression that made that build answer every Verify Remote
 > identically, raising the floor to `v2026.10.15`. A recorded floor is a fact
 > about the day it was resolved, so treat it as a lead and re-run the check.
+>
+> **First ask whether a machine can answer it.** "Needs checking on a Mac" is a
+> claim about two different things — that the behaviour needs a real Chromium,
+> and that it needs *that* Mac — and this section conflated them for a month.
+> Item 5 waited two weeks on an owner card for something headless Electron
+> settles in a second (`pnpm verify:redirect`, § item 5). An owner's attention
+> is the scarcest thing this project spends; spend it only on what genuinely
+> needs his hardware, his Keychain, or his eyes. Before writing a card, try to
+> script it.
 
 1. **The cookie round trip.** With the window signed in to a remote, call
    `client.getMe()` from the main process and confirm it returns 200 rather
@@ -310,17 +319,70 @@ strategy swap, not a redesign. But it should be confirmed before a release:
    server root. This is now the only probe that carries
    `credentials: "include"`, so it is also the only place that mechanism is
    still exercised.
-5. **The redirect interaction (HAV-68).** *Floor: `v2026.10.15`.* The half of
-   HAV-45's Mac plan that the signed-in connect does not exercise: point Verify
-   Remote at a host that redirects `/api/health` and confirm it still reports
-   the redirect target, not an unreachable host. That is the one interaction
-   between `credentials: "include"` and the deliberate `redirect: "manual"`
-   handling in `src/connection/manual-redirect-fetch.ts` that only Chromium can
-   settle. `test/partition-probe-fetch.test.mjs` asserts our half (a
-   cookie-bearing probe still resolves a declined redirect as a 3xx with its
+5. **The redirect interaction (HAV-68) — confirmed. No longer an open check,
+   and it never needed an owner.** *Confirmed 2026-11-06 against `master`
+   (`62915917`), whose two connection files are byte-identical to
+   `v2026.10.15`, on Electron 41.10.7 / Chromium 146, by `pnpm
+   verify:redirect`.* Point Verify Remote at a host that redirects
+   `/api/health` and it reports the redirect target, not an unreachable host.
+   The sentence under the badge, verbatim:
+
+   > `http://github.com/api/health` redirected (HTTP 301) to
+   > `https://github.com/api/health`. Haven Office does not follow redirects
+   > while verifying a remote, so point the connection at the Paperclip origin
+   > itself rather than a gateway or vanity URL.
+
+   `reason` is `not_paperclip`, so the badge reads **"Host reachable, not
+   Paperclip"** (`launcher-html.ts`). That is the whole distinction this item
+   exists to draw: reachable-but-wrong, not dead.
+
+   **"Only Chromium can settle it" was true. "Only the owner's Mac can settle
+   it" was not, and for two weeks nobody separated the two.** This item sat on
+   a pending owner card from 2026-10-22 to 2026-11-06 for a behaviour headless
+   Electron answers in about a second. `scripts/verify-redirect-probe.cjs` runs
+   the real preflight — compiled `dist/`, `electronNet.request`, and the same
+   partition wiring `buildPreflightTransports` builds in `main.ts` — and prints
+   the sentence the badge would show. **Before carding a human for a behaviour,
+   check whether headless Electron will answer it.** That question outlives this
+   item and is the cheapest thing on this page.
+
+   **The negative control, which is what makes the pass mean anything.** The
+   same script against `v2026.10.14` (pre-`2ab0b743`) fails five of its six
+   checks and prints "The connection to github.com ended before any HTTP
+   response arrived. (ERR_CONNECTION_CLOSED)" with `reason: unreachable` — the
+   exact false fail an owner answer from that build would have produced. So the
+   check can fail, and the floor really is `v2026.10.15`.
+
+   **What this does not prove, stated plainly rather than waved at:** it ran on
+   Linux. The redirect reporting is net-stack behaviour with no platform branch
+   in it, and the one macOS-specific candidate — the Local Network permission —
+   was retired by HAV-44's root cause and applies to private addresses anyway,
+   which `github.com` is not. A macOS-only transport problem would surface as a
+   *connection* failure, the HAV-44 class, not as a redirect reported wrongly.
+   Re-running `pnpm verify:redirect` on a Mac costs a second and closes even
+   that residue; it does not justify a card.
+
+   **Two claims this item used to carry that were stale — corrected rather than
+   deleted, because the corrections are the reusable part:**
+
+   - It called this "the one interaction between `credentials: "include"` and
+     `redirect: "manual"`". The health probe **no longer carries credentials**:
+     preflight deliberately split the transports so the eligibility check does
+     not depend on cookie machinery it has no use for (see `sessionFetchImpl`),
+     and the redirect sentence comes from the health probe. The interaction is
+     still live on the *session* probe, so the script asserts the declined
+     redirect on both transports — it is simply not what produces the sentence.
+   - The byte-identity of `manual-redirect-fetch.ts` and
+     `partition-probe-fetch.ts` between `v2026.10.15` and `master` was re-run
+     on 2026-11-06, not recalled. Keep re-running it: that same identity held
+     for `v2026.10.13` too, right until `2ab0b743` broke it.
+
+   `test/partition-probe-fetch.test.mjs` asserts our half of this under `node`
+   (a cookie-bearing probe resolves a declined redirect as a 3xx with its
    `Location`), and `test/manual-redirect-fetch.test.mjs` asserts it under the
-   real Electron-41 event ordering ("an early close does not pre-empt a redirect
-   that arrives later").
+   real Electron-41 event ordering ("an early close does not pre-empt a
+   redirect that arrives later"). Those stay the fast signal; the script is the
+   one that uses a real net stack.
 
    **The floor was `v2026.10.13` until 2026-10-22 and that was wrong.** The
    early-close regression root-caused on HAV-44 made *every* Verify Remote probe
@@ -345,7 +407,10 @@ strategy swap, not a redesign. But it should be confirmed before a release:
    for `v2026.10.13` too until `2ab0b743` broke it; re-run the `git diff --stat`
    against the tag you are naming. **Pick a redirecting URL that is not one of
    the saved remotes**; if it is, the two builds read different cookie jars and
-   the answer stops transferring.
+   the answer stops transferring. `verify-redirect-probe.cjs` asserts that
+   condition on whatever `--target` it is given rather than trusting the choice,
+   so a target that *is* a saved remote fails the run instead of quietly
+   producing an answer that does not transfer.
 6. **Verify Remote on a saved profile (HAV-47) — shipped and exercised. No
    longer an open check; do not raise a card for it.** *Floor: `v2026.10.15`.
    Shipped `v2026.10.14`, exercised by the owner on `v2026.10.15`,
@@ -381,6 +446,49 @@ strategy swap, not a redesign. But it should be confirmed before a release:
    `test/window-policy.test.mjs` asserts the selection itself ("a typed URL
    adopts the saved profile that owns its origin", "two profiles on one origin
    own nothing between them").
+
+### Running the redirect check off a Mac
+
+`pnpm verify:redirect` needs nothing but Electron on macOS. On Linux — a CI
+runner, or an agent's container — Electron needs a Chromium sysroot and the
+headless Ozone backend, because `ldd` on the bundled binary reports two dozen
+missing libraries and there is no X server.
+
+```bash
+# 1. Stage a sysroot you own. Not under /tmp: it is ~500 MB and wants to
+#    survive between runs, and a run-scoped scratch dir is deleted underneath
+#    it. apt-cache resolves the transitive set, which is the part that is
+#    tedious to assemble by hand.
+SYS=~/.cache/sysroot
+mkdir -p "$SYS/debs" "$SYS/root" && cd "$SYS/debs"
+apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts \
+  --no-breaks --no-replaces --no-enhances \
+  libgtk-3-0t64 libnss3 libnspr4 libasound2t64 libcups2t64 libgbm1 \
+  libxkbcommon0 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 \
+  libxcomposite1 libxdamage1 libxrandr2 libxext6 libxfixes3 libx11-6 \
+  libxcb1 libglib2.0-0t64 libpango-1.0-0 libcairo2 libatomic1 \
+  | grep '^\w' | sed 's/:.*//' | sort -u | xargs -n 40 apt-get download
+for d in *.deb; do dpkg -x "$d" "$SYS/root"; done
+
+# 2. Run headless. --ozone-platform=headless is what removes the need for an
+#    X server; Xvfb also works but wants xkbcomp and xkb-data on top.
+export LD_LIBRARY_PATH="$SYS/root/usr/lib/x86_64-linux-gnu:$SYS/root/lib/x86_64-linux-gnu"
+pnpm build
+node_modules/electron/dist/electron --ozone-platform=headless --headless \
+  --no-sandbox --disable-gpu scripts/verify-redirect-probe.cjs
+```
+
+The script reports as `darwin` by default (`HAVEN_REDIRECT_PROBE_PLATFORM`) so
+the sentence it prints is the one the owner's Mac would render, since a
+transport failure is described differently there. Point it somewhere else with
+`--target=`, and remember the target must not be one of the saved remotes — the
+script checks that against the real connections file rather than taking it on
+trust.
+
+To reproduce the negative control, build an older tag into a scratch tree and
+run the same script against it; `git archive v2026.10.14 | tar -x -C <dir>`
+plus a symlinked `node_modules` is enough, and it leaves the working tree
+alone.
 
 ## 5. Module layout
 
