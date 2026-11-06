@@ -335,6 +335,433 @@ test("repeated response headers are joined rather than dropped", async () => {
   assert.equal(result.headers.get("x-empty"), null);
 });
 
+// ---------------------------------------------------------------------------
+// The main.log trace (HAV-78)
+// ---------------------------------------------------------------------------
+//
+// The wrapper bug is fixed; these cover the reason it stayed hidden for four
+// days. Nothing about Verify Remote reached main.log, so the only evidence
+// outside the owner's Mac was a badge reading `ERR_CONNECTION_CLOSED` — which
+// this module synthesizes rather than receives. The trace has to state the
+// event ordering and the elapsed times, because that ordering is the diagnosis.
+
+test("the trace states the event ordering that explains a failure", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+  const response = fakeResponse({ statusCode: 200, headers: {} });
+  requests[0].emit("response", response);
+  response.emit("data", Buffer.from('{"status":"ok"}'));
+  response.emit("end");
+  await pending;
+
+  assert.deepEqual(events(lines), [
+    "GET paperclip.lab.havenco.xyz/api/health start",
+    "response status=200 content-type=<none>",
+    "response.end bytes=15",
+    "settle resolve status=200 reason=response-end",
+  ]);
+  // Every line after the first carries its elapsed time; a wall-clock stamp
+  // alone cannot separate a 2 ms close from a response 250 ms later.
+  for (const line of lines.slice(1)) {
+    assert.match(line.message, /\+\d+ms /);
+  }
+  // One attempt, one id, and the label says which probe spoke.
+  const ids = new Set(lines.map((line) => line.message.split(" ")[1]));
+  assert.equal(ids.size, 1);
+  assert.match([...ids][0], /^#\d+$/);
+  assert.ok(lines.every((line) => line.message.includes(" health ")));
+});
+
+// The exact sequence the owner reproduced in Electron 41.10.7 on 2026-10-22.
+// Had these five lines existed in main.log, HAV-44 would have been one glance:
+// a close with nothing received, then an HTTP 200 that arrives anyway.
+test("an ignored early close is named in the trace rather than passed over", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness({ earlyClose: true });
+
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+  const response = fakeResponse({
+    statusCode: 200,
+    headers: { "content-type": "application/json" },
+  });
+  requests[0].emit("response", response);
+  response.emit("data", Buffer.from('{"status":"ok"}'));
+  response.emit("end");
+  await pending;
+
+  assert.deepEqual(events(lines), [
+    "GET paperclip.lab.havenco.xyz/api/health start",
+    "close responded=no redirected=no ignored reason=nothing-received-yet awaiting=response|error|abort",
+    "response status=200 content-type=application/json",
+    "response.end bytes=15",
+    "settle resolve status=200 reason=response-end",
+  ]);
+  // A survived close is not trouble, so it must not be logged as trouble.
+  assert.deepEqual(lines.filter((line) => line.level === "warn"), []);
+  // One event, one line. The verdict is decided by the two facts already on the
+  // line, so a second line carried no new information and was a third of the
+  // volume of a healthy attempt.
+  assert.equal(lines.filter((line) => line.message.includes(" close ")).length, 1);
+});
+
+test("a failure logs Chromium's own code and settles at warn level", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness({ earlyClose: true });
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit("error", Object.assign(new Error("net::ERR_CONNECTION_REFUSED"), {
+    code: "ERR_CONNECTION_REFUSED",
+  }));
+  await assert.rejects(pending);
+
+  // The code is on the settle line as well as the event line: the runbook sends
+  // a reader to `[warn]` to find the failure, and `transport-error` is one of
+  // the two reasons that forward a real Chromium code rather than a synthesized
+  // one — so grepping the level alone has to yield the code too.
+  assert.deepEqual(events(lines).slice(-2), [
+    "error code=ERR_CONNECTION_REFUSED name=Error message=net::ERR_CONNECTION_REFUSED",
+    "settle reject reason=transport-error code=ERR_CONNECTION_REFUSED name=Error message=net::ERR_CONNECTION_REFUSED",
+  ]);
+  assert.deepEqual(
+    lines.filter((line) => line.level === "warn").map((line) => event(line)),
+    [
+      "settle reject reason=transport-error code=ERR_CONNECTION_REFUSED name=Error message=net::ERR_CONNECTION_REFUSED",
+    ],
+  );
+});
+
+// The other reason that forwards a real code rather than inventing one.
+test("a response stream failure settles with the code, not just the category", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  const response = fakeResponse({ statusCode: 200, headers: {} });
+  requests[0].emit("response", response);
+  response.emit(
+    "error",
+    Object.assign(new Error("net::ERR_INCOMPLETE_CHUNKED_ENCODING"), {
+      code: "ERR_INCOMPLETE_CHUNKED_ENCODING",
+    }),
+  );
+  await assert.rejects(pending);
+
+  assert.deepEqual(
+    lines.filter((line) => line.level === "warn").map((line) => event(line)),
+    [
+      "settle reject reason=response-stream-error code=ERR_INCOMPLETE_CHUNKED_ENCODING" +
+        " name=Error message=net::ERR_INCOMPLETE_CHUNKED_ENCODING",
+    ],
+  );
+});
+
+// `code=<none>` is itself the finding: it means `describeFetchError` had nothing
+// to key a repair hint off, so the user got a bare sentence. That was the state
+// of the probe path until 2026-10-21.
+test("an error carrying no code says so instead of looking classified", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit("error", new Error("something went wrong"));
+  await assert.rejects(pending);
+
+  assert.ok(events(lines).includes("error code=<none> name=Error message=something went wrong"));
+});
+
+test("a declined redirect records where it was sent and that it was not followed", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit("redirect", 302, "GET", "https://sso.havenco.xyz/login?token=secret", {});
+  requests[0].emit("error", new Error("net::ERR_ABORTED"));
+  await pending;
+
+  assert.ok(
+    events(lines).includes(
+      "redirect status=302 location=sso.havenco.xyz/login?<redacted> followed=no",
+    ),
+  );
+  assert.ok(events(lines).includes("settle resolve status=302 reason=captured-redirect"));
+});
+
+// main.log is a file the owner pastes into an issue, and the probed URL is
+// user-typed and treated as attacker-influenced everywhere else in preflight.
+// So: host and path only — no query, no userinfo, no cookies, no other headers.
+test("no credential-bearing material reaches the trace", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+
+  const pending = fetchImpl(
+    "https://alice:hunter2@paperclip.lab.havenco.xyz/api/health?token=sekret#frag",
+    { headers: { cookie: "paperclip_session=sekret", authorization: "Bearer sekret" } },
+  );
+  const response = fakeResponse({
+    statusCode: 200,
+    headers: { "content-type": "application/json", "set-cookie": "paperclip_session=sekret" },
+  });
+  requests[0].emit("response", response);
+  response.emit("data", Buffer.from('{"token":"sekret"}'));
+  response.emit("end");
+  await pending;
+
+  const trace = lines.map((line) => line.message).join("\n");
+  assert.doesNotMatch(trace, /sekret/);
+  assert.doesNotMatch(trace, /hunter2/);
+  assert.doesNotMatch(trace, /alice/);
+  assert.doesNotMatch(trace, /authorization|set-cookie|cookie/i);
+  // The path still identifies which probe this was, and the marker still says a
+  // query was present — that much is diagnostic and carries nothing.
+  assert.ok(trace.includes("paperclip.lab.havenco.xyz/api/health?<redacted> start"));
+});
+
+// A message from the network stack is free text with no promise of being
+// URL-free, so it gets scrubbed too — without mangling the `net::ERR_*` codes
+// that are the reason to log it at all.
+test("a query string embedded in an error message is scrubbed", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit(
+    "error",
+    new Error("failed loading https://paperclip.lab.havenco.xyz/api/health?token=sekret"),
+  );
+  await assert.rejects(pending);
+
+  const trace = lines.map((line) => line.message).join("\n");
+  assert.doesNotMatch(trace, /sekret/);
+  assert.ok(trace.includes("message=failed loading https://paperclip.lab.havenco.xyz/api/health?<redacted>"));
+});
+
+// A `Location` has none of the probed URL's guarantees — validate.ts pins the
+// URL the user typed, not where a server chooses to send us next — and a token
+// in a *path* is the normal shape for Cloudflare Access, signed URLs and
+// `/s/<token>` share links. Reported by Friday reviewing haven-office#8.
+test("a redirect location keeps only its first path segment", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit(
+    "redirect",
+    302,
+    "GET",
+    "https://sso.havenco.xyz/cdn-cgi/access/login/eyJhbGciOiJIUzI1NiJ9.MY-REAL-JWT/callback",
+    {},
+  );
+  requests[0].emit("error", new Error("net::ERR_ABORTED"));
+  await pending;
+
+  const trace = lines.map((line) => line.message).join("\n");
+  assert.doesNotMatch(trace, /eyJhbGciOiJIUzI1NiJ9|MY-REAL-JWT/);
+  // Still says the hop left our host and roughly where to, which is the whole
+  // diagnostic value of the line.
+  assert.ok(
+    events(lines).includes(
+      "redirect status=302 location=sso.havenco.xyz/cdn-cgi/<redacted> followed=no",
+    ),
+  );
+});
+
+test("a redirect location that is one long opaque segment is capped", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit("redirect", 302, "GET", `https://sso.havenco.xyz/${"s".repeat(400)}`, {});
+  requests[0].emit("error", new Error("net::ERR_ABORTED"));
+  await pending;
+
+  const redirectLine = lines.find((line) => line.message.includes(" redirect "));
+  assert.ok(redirectLine.message.includes("<truncated, 400 chars>"));
+  assert.ok(redirectLine.message.length < 200);
+});
+
+// Three faults in one, and all three matter: a newline breaks the one-line-per
+// -event contract the runbook teaches, `grep '[verify-remote]'` silently loses
+// the continuation lines, and `\S*` stops at whitespace so a query after a
+// newline was only half scrubbed.
+test("a multi-line error message is flattened to one line, scrubbed throughout", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit(
+    "error",
+    new Error("proxy said:\nAuthorization: Bearer leaked-token\nvia /login?token=sekret\nend"),
+  );
+  await assert.rejects(pending);
+
+  const trace = lines.map((line) => line.message).join("\n");
+  assert.doesNotMatch(trace, /sekret/);
+  // A gateway that quotes the request it rejected would otherwise put the
+  // request's own Authorization header in the log. Best effort, not a
+  // guarantee — free text from a remote host cannot be proven clean — which is
+  // why the cap exists and why the runbook calls a credential-shaped trace line
+  // a security finding.
+  assert.doesNotMatch(trace, /leaked-token/);
+  assert.ok(lines.every((line) => !line.message.includes("\n")));
+  assert.ok(
+    trace.includes(
+      "message=proxy said: Authorization: Bearer <redacted> via /login?<redacted>",
+    ),
+  );
+});
+
+test("an unbounded error message is capped with its true length", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit("error", new Error("x".repeat(5000)));
+  await assert.rejects(pending);
+
+  const errorLine = lines.find((line) => line.message.includes(" error "));
+  assert.ok(errorLine.message.includes("<truncated, 5000 chars>"));
+  assert.ok(errorLine.message.length < 300);
+});
+
+// Not reachable from the typed URL — validate.ts rejects userinfo outright — so
+// this is defence in depth for a string the *server* writes.
+test("userinfo inside an error message is stripped", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit("error", new Error("redirected to https://alice:hunter2@sso.havenco.xyz/login"));
+  await assert.rejects(pending);
+
+  const trace = lines.map((line) => line.message).join("\n");
+  assert.doesNotMatch(trace, /hunter2|alice/);
+  assert.ok(trace.includes("https://<redacted>@sso.havenco.xyz/login"));
+});
+
+// `content-type` cannot carry a credential by definition, but it can carry
+// several hundred characters of whatever a captive portal feels like emitting.
+test("an oversized content-type is capped rather than printed in full", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  const response = fakeResponse({
+    statusCode: 200,
+    headers: { "content-type": `text/html; portal-session=${"A".repeat(400)}` },
+  });
+  requests[0].emit("response", response);
+  response.emit("end");
+  await pending;
+
+  const responseLine = lines.find((line) => line.message.includes(" response status="));
+  assert.ok(responseLine.message.includes("content-type=text/html; portal-session=A"));
+  assert.ok(responseLine.message.includes("chars>"));
+  assert.ok(responseLine.message.length < 200);
+});
+
+// The runbook teaches `code=… name=… message=…`; the shape has to hold even when
+// the network stack throws something that is not an Error.
+test("a non-Error failure still logs the three fields the runbook teaches", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  requests[0].emit("error", "net::ERR_FAILED");
+  await assert.rejects(pending);
+
+  assert.ok(
+    events(lines).includes("error code=<none> name=<not-an-error> message=net::ERR_FAILED"),
+  );
+});
+
+test("a close after a response started is reported as mid-body, with the status", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  const response = fakeResponse({ statusCode: 200, headers: {} });
+  requests[0].emit("response", response);
+  response.emit("data", Buffer.from('{"status":"o'));
+  requests[0].emit("close");
+  await assert.rejects(pending);
+
+  assert.deepEqual(events(lines).slice(-2), [
+    "close responded=HTTP 200 redirected=no",
+    "settle reject reason=closed-mid-body status=200 code=ERR_RESPONSE_INCOMPLETE",
+  ]);
+});
+
+test("a caller timeout is distinguishable from the network refusing", async () => {
+  const { requests, fetchImpl, lines } = tracingHarness();
+  const controller = new AbortController();
+
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health", {
+    signal: controller.signal,
+  });
+  controller.abort();
+  await assert.rejects(pending);
+
+  assert.ok(events(lines).includes("settle reject reason=aborted-by-caller"));
+  assert.equal(requests[0].aborted, true);
+});
+
+test("an already-aborted signal is traced, not silently dropped", async () => {
+  const { fetchImpl, lines } = tracingHarness();
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(
+    fetchImpl("https://paperclip.lab.havenco.xyz/api/health", { signal: controller.signal }),
+    (error) => error.name === "AbortError",
+  );
+
+  assert.deepEqual(events(lines), [
+    "GET paperclip.lab.havenco.xyz/api/health start",
+    "settle reject reason=signal-already-aborted",
+  ]);
+});
+
+// The transport must stay usable from plain node and from any caller that
+// passes no logger — which is every other test in this file.
+test("no logger means no logging and no throwing", async () => {
+  const { requests, fetchImpl } = harness();
+  const pending = fetchImpl("https://paperclip.lab.havenco.xyz/api/health");
+
+  const response = fakeResponse({ statusCode: 200, headers: {} });
+  requests[0].emit("response", response);
+  response.emit("end");
+
+  assert.equal((await pending).status, 200);
+});
+
+/**
+ * Captures the trace the way `electron-log` would receive it: one string per
+ * line, with the level, since level is how a reader finds a failed attempt in a
+ * log that also carries the updater's chatter.
+ */
+function tracingHarness({ earlyClose = false } = {}) {
+  const requests = [];
+  const lines = [];
+  const record = (level) => (message) => lines.push({ level, message });
+
+  const fetchImpl = createManualRedirectFetch({
+    log: { info: record("info"), warn: record("warn") },
+    logLabel: "health",
+    createRequest: (init) => {
+      const request = new FakeRequest();
+      request.init = init;
+      if (earlyClose) {
+        request.end = function end() {
+          this.ended = true;
+          this.emit("finish");
+          this.emit("close");
+        };
+      }
+      requests.push(request);
+      return request;
+    },
+  });
+
+  return { requests, fetchImpl, lines };
+}
+
+/** The line with its `[verify-remote] #N label +Nms` preamble removed. */
+function event(line) {
+  return line.message
+    .replace(/^\[verify-remote\] #\d+ \w+ /, "")
+    .replace(/^\+\d+ms /, "");
+}
+
+function events(lines) {
+  return lines.map(event);
+}
+
 /**
  * A harness whose `end()` emits `finish` then `close` synchronously, the way
  * Electron 41's ClientRequest does — the behaviour that produced the HAV-44

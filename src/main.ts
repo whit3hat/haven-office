@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import log from "electron-log";
 import treeKill from "tree-kill";
 import { checkForUpdatesFromMenu, initAutoUpdater } from "./updater";
 import { getLauncherHtml } from "./launcher-html";
@@ -1190,13 +1191,25 @@ function remoteProbeTransports(
   // electronNet.request rather than preflightSession.fetch: both use Chromium's
   // stack, but only the former lets us decline a redirect and still see it. See
   // src/connection/manual-redirect-fetch.ts.
+  //
+  // `log` is what makes a Verify Remote failure diagnosable from outside this
+  // machine. Until 2026-10-22 these transports wrote nothing to main.log, so
+  // the only artefact of a failure was a badge reading `ERR_CONNECTION_CLOSED`
+  // — a string the wrapper synthesizes, not an outcome Chromium reported — and
+  // HAV-44 took four days and a mis-anchored bisect to reach a cause the event
+  // ordering states outright. The labels keep the two probes apart in the
+  // trace, since preflight runs them against the same host.
   return {
     health: createManualRedirectFetch({
+      log,
+      logLabel: "health",
       createRequest: ({ method, url, redirect }) =>
         electronNet.request({ method, url, redirect, session: preflightSession }),
     }),
     session: createPartitionProbeFetch({
       session: preflightSession,
+      log,
+      logLabel: "session",
       createRequest: (init) => electronNet.request(init),
       readCookies: partitionCookieReader(preflightSession),
     }),

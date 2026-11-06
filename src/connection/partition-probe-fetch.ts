@@ -44,6 +44,7 @@ import {
   createManualRedirectFetch,
   type ClientRequestLike,
   type CreateRequestInit,
+  type TransportLogger,
 } from "./manual-redirect-fetch";
 
 /** What the probe hands Electron's `net.request`, session and cookies included. */
@@ -60,6 +61,15 @@ export interface PartitionProbeFetchOptions<SessionLike> {
   /** Reads the partition's jar; see `partitionCookieReader`. */
   readCookies: CookieReader;
   maxBodyBytes?: number;
+  /**
+   * Passed straight to the underlying transport, which is where the events
+   * actually happen. Nothing is logged about the cookie jar itself: a count
+   * would be useful for the HAV-45 `signed_out` case but is a different
+   * question from "what did the transport do", and the jar is the one thing
+   * here that is definitionally a credential.
+   */
+  log?: TransportLogger;
+  logLabel?: string;
 }
 
 export function createPartitionProbeFetch<SessionLike>(
@@ -67,6 +77,8 @@ export function createPartitionProbeFetch<SessionLike>(
 ): typeof fetch {
   const transport = createManualRedirectFetch({
     maxBodyBytes: options.maxBodyBytes,
+    log: options.log,
+    logLabel: options.logLabel,
     createRequest: (init) =>
       options.createRequest({
         ...init,

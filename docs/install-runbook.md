@@ -1013,7 +1013,7 @@ already installed it keeps it; publish a higher version to move them.
 | **No menu-bar icon at all** | **Nothing before `v2026.10.13`** — the menu-bar surface did not exist. On `v2026.10.13` or newer, it appears only once a connection is up, so check the window is actually connected first. If it is and there is still no icon, that is a real finding worth reporting: both the icon's presence in the `.app` and the app's own report that it loaded a non-empty image are asserted in CI, so a build that got published should have neither failure. Quote the `[tray]` line from the app log (§ 8 below) — `icon=empty` means the bundle lost the asset, no `[tray]` line at all means the wiring never ran. |
 | **A menu-bar count that looks wrong or old** | If the number has a trailing **`?`** it *is* old, deliberately — the connection dropped and that is the last count we could actually fetch (§ 4d). Bare numbers are live. If a bare number disagrees with the board, report it with both values. |
 | **No notification banners** | Three independent switches, in the order worth checking: **Notifications** ticked in the menu-bar menu; **System Settings → Notifications → Haven Office** allowed; and whether anything has *newly* appeared at all — items already waiting when the app started are silent by design, and each item notifies only once, ever (§ 4d). If Haven Office is missing from the System Settings list entirely, macOS has not registered it yet; § 4d covers that. |
-| **Remote verification fails** | The app tells you which check failed — see [the table below](#remote-verification-messages) for what each message means. A private authenticated deployment redacting fields is fine and still verifies; a wrong host or an offline server is not. Confirm the URL works in a browser first. For the lab remote specifically, the server's half of that check is measured and known good — [see part 4b](#lab-remote-server-half) — so a failure there is between your Mac and the host. |
+| **Remote verification fails** | The app tells you which check failed — see [the table below](#remote-verification-messages) for what each message means. A private authenticated deployment redacting fields is fine and still verifies; a wrong host or an offline server is not. Confirm the URL works in a browser first. For the lab remote specifically, the server's half of that check is measured and known good — [see part 4b](#lab-remote-server-half) — so a failure there is between your Mac and the host. **Before forming any theory, read the `[verify-remote]` trace in `main.log`** — [see below](#verify-remote-trace). The badge is a summary and some of it is synthesized; the trace is what the transport actually did. |
 | **Verification failed — and clicking the saved connection fails the same way** | **Expected: there is no bypass, by design.** Connecting runs the identical preflight before any window opens (`bootRemote` in `src/main.ts` refuses on a failed result), so a saved connection, a typed URL and the **Verify Remote** button all fail together on the same fault. The repair is whatever the message names, not a different route into the app. The only asymmetry is *which cookie jar* each side probes, and that is a separate bug — see the row below. |
 | **"Verified remote - sign-in required" (amber) for a remote you *are* signed in to** | On any build without `bf49cf71` — which is **every release up to and including `v2026.10.13`**, fixed in `v2026.10.14` — **Verify Remote** reads a different cookie jar than the window does for a *saved* connection, so it reports no session for one you have. It is cosmetic: **Connect Remote** is still enabled and connecting still works. On a fresh install, before you have signed in at all, this badge is simply the correct answer (part 4b, step 3). |
 | **Signed in on the web but not in the app** | Sessions are not shared with your browser. Sign in inside the app window. |
@@ -1065,6 +1065,112 @@ failure greys out **Connect Remote**: if that button is clickable, the check suc
 > troubleshooting fixes that. From `v2026.10.11` the app is listable, and a confirmed
 > denial is reported as **Local network blocked** rather than sharing a badge with a
 > network fault.
+
+<a id="verify-remote-trace"></a>
+
+### The `main.log` transport trace — read this before theorising
+
+**From the first build after `v2026.10.15`, every Verify Remote attempt writes its transport
+events to the app log.** Before that it wrote nothing at all, and that absence is the reason the
+`v2026.10.15` fix above took four days: the only artefact anyone away from the owner's Mac
+could see was a badge reading `ERR_CONNECTION_CLOSED`, which the app **synthesizes** rather
+than receives, so it carried no information about what the network actually did. Theories
+about DNS, the VPN, macOS Local Network permission, saved app state, per-app filtering and
+a mis-anchored bisect were all worked through before the cause was reached. The event
+ordering states it outright.
+
+```sh
+open ~/Library/Logs/Haven\ Office/main.log
+```
+
+Grep for `[verify-remote]`. Each attempt looks like this — the healthy case:
+
+```
+[verify-remote] #1 health GET paperclip.lab.havenco.xyz/api/health start
+[verify-remote] #1 health +2ms close responded=no redirected=no ignored reason=nothing-received-yet awaiting=response|error|abort
+[verify-remote] #1 health +253ms response status=200 content-type=application/json
+[verify-remote] #1 health +254ms response.end bytes=47
+[verify-remote] #1 health +254ms settle resolve status=200 reason=response-end
+```
+
+How to read it:
+
+- **`#N`** correlates one attempt's lines. **`health`** or **`session`** says which of the two
+  probes spoke (`/api/health` and `/api/auth/get-session`), because they run against the same
+  host and interleave. The counter **restarts at 1 each time the app launches** while this file
+  is appended to across launches, so one `main.log` can hold several unrelated `#1 health`
+  attempts — the wall-clock stamp `electron-log` prepends is what separates them.
+- **`+NNNms`** is elapsed from **entry into the probe transport** — earlier than
+  `request.end()`, so request construction and header wiring are inside it. This is the field
+  that matters and the reason the wall-clock stamp is not enough: the whole `v2026.10.15` bug is
+  a `close` at **+2 ms** and a `response` at **+253 ms**, and nothing distinguishes those at
+  one-second resolution. **A `close responded=no … ignored` followed by a `response` is normal**
+  — that is Electron 41's writable-side close, and the line above is what a healthy attempt
+  looks like, not a fault.
+- **`error code=…`** is Chromium's own code, forwarded, not ours. This is the single most useful
+  line in the file. **`code=<none>`** is itself a finding: it means the user got a bare sentence
+  with no repair attached, because `describeFetchError` keys every hint off that code. The same
+  `code= name= message=` triple appears on the `settle` line for the two reject reasons that
+  forward a real code (`transport-error`, `response-stream-error`), so grepping `[warn]` alone
+  is enough.
+- **`settle …`** is the decision and its reason — `resolve` with a status, or `reject` with one of
+  `transport-error`, `closed-mid-body`, `request-aborted`, `aborted-by-caller`,
+  `signal-already-aborted`, `response-stream-error`, `body-too-large`, `create-request-threw`.
+  Exactly one `settle` line per attempt. A failed attempt logs at **`[warn]`**, so the levels
+  alone find it. **Lines can appear after it** — see the declined-redirect case below — because
+  the transport keeps narrating events the network stack is still emitting after the result is
+  decided.
+- **No `settle` line at all** means the attempt never finished — which the 8 s abort timeout
+  should have turned into `aborted-by-caller`. That combination is a new defect; report it with
+  the lines quoted.
+- **`settle reject reason=signal-already-aborted` at `+0ms`** means the caller's timeout had
+  already expired before the transport started. For the `session` probe that usually means it
+  expired during the partition cookie-jar read, which happens before this clock starts and is
+  deliberately not logged (the jar is definitionally a credential).
+
+**A declined redirect logs an `error` and an `abort` that are not faults.** This is the healthy
+path for any SSO-fronted remote, so it is worth recognising:
+
+```
+[verify-remote] #3 health GET paperclip.lab.havenco.xyz/api/health start
+[verify-remote] #3 health +43ms redirect status=302 location=sso.havenco.xyz/cdn-cgi/<redacted> followed=no
+[verify-remote] #3 health +43ms abort
+[verify-remote] #3 health +43ms settle resolve status=302 reason=captured-redirect
+[verify-remote] #3 health +44ms error code=ERR_ABORTED name=Error message=net::ERR_ABORTED
+[verify-remote] #3 health +44ms close responded=no redirected=HTTP 302
+```
+
+`followed=no` means the probe deliberately declined the hop, which cancels the request — so the
+`abort` and the `ERR_ABORTED` after it are **self-inflicted and expected**, and they arrive
+after the `settle` line that already resolved. Read the `settle` line, not the last line.
+
+**What it deliberately does not contain.** Nothing logged can carry a credential, and the rule
+follows who controls the string:
+
+- **The probed URL** keeps its host and path, with any query replaced by `?<redacted>` — a bare
+  marker tells you a query was present. That is safe only because `src/connection/validate.ts`
+  pins it to a fixed same-origin path and rejects userinfo before the transport sees it.
+- **A redirect `location`** gets no such guarantee from the server, and tokens sit in paths as
+  often as in queries (Cloudflare Access, signed URLs, `/s/<token>` share links). So it keeps
+  the host and **only the first path segment**: `sso.havenco.xyz/cdn-cgi/<redacted>`. That still
+  says the hop left your host and roughly where to, which is all the diagnosis needs.
+- **`message=` and `content-type=`** are unbounded free text the server writes. Both are
+  collapsed to a single line, stripped of any `//user:pass@` and of any credential after a
+  `Bearer`/`Basic` scheme, cut from the first `?` or `#`, and capped — a
+  `<truncated, N chars>` marker gives the true length. One event is always one line, so
+  `grep '[verify-remote]'` cannot lose part of a trace. **These two fields are best effort:**
+  text a remote host wrote cannot be proven credential-free by pattern, which is why they are
+  capped and why the paragraph below applies to them first.
+- **Request headers, cookies, the cookie jar, response headers other than `content-type`, and
+  response bodies** are never written at all — a body is only a **byte count**.
+
+`main.log` is a file people paste into issues. If you find anything credential-shaped in a
+`[verify-remote]` line, that is a security finding, not a logging bug.
+
+**No `[verify-remote]` lines at all** means a build at or before `v2026.10.15`, which is every
+published build as of 2026-10-22. Upgrade before investigating a Verify Remote failure any
+further — on those builds the badge text in the table above is genuinely all the evidence that
+exists.
 
 **The server log** is the first place to look for anything local-mode related:
 
